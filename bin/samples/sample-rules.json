@@ -1,0 +1,58 @@
+[
+  {
+    "ruleId": "rule-001",
+    "ruleName": "撞库攻击检测",
+    "ruleType": "CREDENTIAL_STUFFING",
+    "status": "ENABLED",
+    "targetActionType": "LOGIN_FAIL",
+    "windowSizeMs": 60000,
+    "threshold": 3,
+    "groupKeyType": "BY_IP",
+    "priority": 10,
+    "description": "同一 IP 在 1 分钟内登录失败超过 3 次，判定为撞库攻击",
+    "version": 1,
+    "updateTimestamp": 1700000000000
+  },
+  {
+    "ruleId": "rule-002",
+    "ruleName": "刷单行为检测",
+    "ruleType": "ORDER_BRUSH",
+    "status": "ENABLED",
+    "targetActionType": "ORDER",
+    "windowSizeMs": 60000,
+    "threshold": 5,
+    "groupKeyType": "BY_USER_ID",
+    "priority": 20,
+    "description": "同一用户在 1 分钟内下单超过 5 次，判定为刷单行为",
+    "version": 1,
+    "updateTimestamp": 1700000000000
+  },
+  {
+    "ruleId": "rule-003",
+    "ruleName": "高频访问检测",
+    "ruleType": "HIGH_FREQ_ACCESS",
+    "status": "ENABLED",
+    "targetActionType": "VIEW",
+    "windowSizeMs": 10000,
+    "threshold": 50,
+    "groupKeyType": "BY_IP",
+    "priority": 30,
+    "description": "同一 IP 在 10 秒内访问超过 50 次，判定为恶意爬虫或攻击",
+    "version": 1,
+    "updateTimestamp": 1700000000000
+  },
+  {
+    "ruleId": "rule-004",
+    "ruleName": "支付欺诈检测",
+    "ruleType": "PAYMENT_FRAUD",
+    "status": "ENABLED",
+    "targetActionType": "PAYMENT",
+    "windowSizeMs": 300000,
+    "threshold": 10,
+    "groupKeyType": "BY_USER_ID",
+    "priority": 5,
+    "description": "同一用户在 5 分钟内支付超过 10 次，可能存在盗刷风险",
+    "version": 1,
+    "updateTimestamp": 1700000000000
+  }
+]

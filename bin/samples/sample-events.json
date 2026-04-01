@@ -1,0 +1,19 @@
+[
+  {"userId": "user001", "actionType": "LOGIN_FAIL", "ip": "192.168.1.100", "timestamp": 1700000000000, "sessionId": "sess-001", "deviceId": "dev-001"},
+  {"userId": "user002", "actionType": "LOGIN_FAIL", "ip": "192.168.1.100", "timestamp": 1700000010000, "sessionId": "sess-002", "deviceId": "dev-002"},
+  {"userId": "user003", "actionType": "LOGIN_FAIL", "ip": "192.168.1.100", "timestamp": 1700000020000, "sessionId": "sess-003", "deviceId": "dev-003"},
+  {"userId": "user004", "actionType": "LOGIN_FAIL", "ip": "192.168.1.100", "timestamp": 1700000030000, "sessionId": "sess-004", "deviceId": "dev-004"},
+  
+  {"userId": "user100", "actionType": "ORDER", "ip": "192.168.1.200", "timestamp": 1700000000000, "sessionId": "sess-100", "productId": "prod-001", "amount": 99.99},
+  {"userId": "user100", "actionType": "ORDER", "ip": "192.168.1.200", "timestamp": 1700000005000, "sessionId": "sess-100", "productId": "prod-002", "amount": 199.99},
+  {"userId": "user100", "actionType": "ORDER", "ip": "192.168.1.200", "timestamp": 1700000010000, "sessionId": "sess-100", "productId": "prod-003", "amount": 59.99},
+  {"userId": "user100", "actionType": "ORDER", "ip": "192.168.1.200", "timestamp": 1700000015000, "sessionId": "sess-100", "productId": "prod-004", "amount": 299.99},
+  {"userId": "user100", "actionType": "ORDER", "ip": "192.168.1.200", "timestamp": 1700000020000, "sessionId": "sess-100", "productId": "prod-005", "amount": 149.99},
+  {"userId": "user100", "actionType": "ORDER", "ip": "192.168.1.200", "timestamp": 1700000025000, "sessionId": "sess-100", "productId": "prod-006", "amount": 79.99},
+  
+  {"userId": "user200", "actionType": "LOGIN", "ip": "10.0.0.1", "timestamp": 1700000000000, "sessionId": "sess-200", "deviceId": "dev-200"},
+  {"userId": "user200", "actionType": "VIEW", "ip": "10.0.0.1", "timestamp": 1700000001000, "sessionId": "sess-200", "productId": "prod-100"},
+  {"userId": "user200", "actionType": "ADD_CART", "ip": "10.0.0.1", "timestamp": 1700000005000, "sessionId": "sess-200", "productId": "prod-100"},
+  {"userId": "user200", "actionType": "ORDER", "ip": "10.0.0.1", "timestamp": 1700000010000, "sessionId": "sess-200", "productId": "prod-100", "amount": 599.99},
+  {"userId": "user200", "actionType": "PAYMENT", "ip": "10.0.0.1", "timestamp": 1700000015000, "sessionId": "sess-200", "productId": "prod-100", "amount": 599.99}
+]

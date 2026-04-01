@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import cn.edu.ustb.detection.model.RiskRule;
 import cn.edu.ustb.detection.model.UserBehavior;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -15,13 +14,11 @@ public class SerializationTest {
 
     private JsonDeserializationSchema<UserBehavior> behaviorDeserializer;
     private JsonDeserializationSchema<RiskRule> ruleDeserializer;
-    private ObjectMapper objectMapper;
 
     @BeforeEach
     void setup() throws Exception {
         behaviorDeserializer = new JsonDeserializationSchema<>(UserBehavior.class);
         ruleDeserializer = new JsonDeserializationSchema<>(RiskRule.class);
-        objectMapper = new ObjectMapper();
     }
 
     @Test
@@ -126,6 +123,35 @@ public class SerializationTest {
         assertEquals("LOGIN", event.getActionType());
         assertNull(event.getIp());
         assertNull(event.getSessionId());
+    }
+
+    @Test
+    @DisplayName("Should map Kaggle aliases to UserBehavior fields")
+    void testKaggleAliasMapping() throws Exception {
+        String json = "{" + "\"user_id\":10001," + "\"event_type\":\"view\","
+                + "\"event_time\":\"2019-10-01 00:00:01\"," + "\"user_session\":\"sess-kaggle\","
+                + "\"product_id\":555001" + "}";
+
+        UserBehavior event = behaviorDeserializer.deserialize(json.getBytes(StandardCharsets.UTF_8));
+
+        assertNotNull(event);
+        assertEquals("10001", event.getUserId());
+        assertEquals("VIEW", event.getActionType());
+        assertTrue(event.getTimestamp() > 0L);
+        assertEquals("sess-kaggle", event.getSessionId());
+        assertEquals("555001", event.getProductId());
+    }
+
+    @Test
+    @DisplayName("Should parse IEEE TransactionDT to timestamp")
+    void testIeeeTransactionDtMapping() throws Exception {
+        String json = "{" + "\"user_id\":\"u-1\"," + "\"event_type\":\"purchase\"," + "\"TransactionDT\":1000" + "}";
+
+        UserBehavior event = behaviorDeserializer.deserialize(json.getBytes(StandardCharsets.UTF_8));
+
+        assertNotNull(event);
+        assertEquals("PURCHASE", event.getActionType());
+        assertTrue(event.getTimestamp() > 1_512_086_400_000L);
     }
 
     @Test

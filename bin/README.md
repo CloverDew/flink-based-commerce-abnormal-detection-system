@@ -401,7 +401,7 @@ src/
 如果你不想手动进入 Docker 容器，可直接运行这个测试：
 
 ```bash
-mvn -Dit.testcontainers=true -Dtest=KafkaE2ETestcontainersTest test
+mvn -Dtest=KafkaE2ETestcontainersTest test
 ```
 
 该测试会自动：
@@ -412,8 +412,6 @@ mvn -Dit.testcontainers=true -Dtest=KafkaE2ETestcontainersTest test
 4. 从 `tc-alerts` 主题消费并断言告警是否触发
 
 前提：本机 Docker Desktop 可用。
-
-说明：该测试默认不会在普通 `mvn test` 中执行，避免影响日常开发速度；按上面的命令显式开启即可。
 
 ## 注意事项
 
