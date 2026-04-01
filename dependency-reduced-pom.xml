@@ -73,13 +73,16 @@
         </executions>
         <configuration>
           <java>
-            <googleJavaFormat />
+            <eclipse>
+              <file>${project.basedir}/spotless.eclipseformat.xml</file>
+            </eclipse>
             <removeUnusedImports />
             <trimTrailingWhitespace />
             <endWithNewline />
           </java>
           <pom>
             <sortPom>
+              <nrOfIndentSpace>4</nrOfIndentSpace>
               <expandEmptyElements>false</expandEmptyElements>
               <spaceBeforeCloseEmptyElement>true</spaceBeforeCloseEmptyElement>
             </sortPom>
@@ -188,10 +191,6 @@
           <groupId>org.apache.logging.log4j</groupId>
         </exclusion>
         <exclusion>
-          <artifactId>testcontainers</artifactId>
-          <groupId>org.testcontainers</groupId>
-        </exclusion>
-        <exclusion>
           <artifactId>assertj-core</artifactId>
           <groupId>org.assertj</groupId>
         </exclusion>
@@ -211,6 +210,42 @@
       <type>test-jar</type>
       <scope>test</scope>
     </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>1.20.4</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers</artifactId>
+      <version>1.20.4</version>
+      <scope>test</scope>
+      <exclusions>
+        <exclusion>
+          <artifactId>junit</artifactId>
+          <groupId>junit</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>duct-tape</artifactId>
+          <groupId>org.rnorth.duct-tape</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>docker-java-api</artifactId>
+          <groupId>com.github.docker-java</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>docker-java-transport-zerodep</artifactId>
+          <groupId>com.github.docker-java</groupId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>kafka</artifactId>
+      <version>1.20.4</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
   <properties>
     <flink.version>1.17.2</flink.version>
@@ -223,5 +258,6 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <jackson.version>2.15.2</jackson.version>
     <maven.compiler.source>11</maven.compiler.source>
+    <testcontainers.version>1.20.4</testcontainers.version>
   </properties>
 </project>
