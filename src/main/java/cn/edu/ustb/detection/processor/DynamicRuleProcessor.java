@@ -2,6 +2,7 @@ package cn.edu.ustb.detection.processor;
 
 import cn.edu.ustb.detection.model.RiskRule;
 import cn.edu.ustb.detection.model.UserBehavior;
+import java.util.Map;
 import org.apache.flink.api.common.state.BroadcastState;
 import org.apache.flink.api.common.state.MapStateDescriptor;
 import org.apache.flink.api.common.state.ReadOnlyBroadcastState;
@@ -14,58 +15,53 @@ import org.apache.flink.util.Collector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Map;
-
 /**
  * 动态规则处理器
- * 
+ *
+ * <p>
  * 使用 Broadcast State 模式实现风控规则的热加载。
- * 
- * 处理流程：
- * 1. 规则流（Broadcast Stream）：将规则广播到所有并行实例，存储在 Broadcast State 中
- * 2. 事件流（Data Stream）：读取当前规则集，对每个事件进行规则匹配预处理
- * 
+ *
+ * <p>
+ * 处理流程： 1. 规则流（Broadcast Stream）：将规则广播到所有并行实例，存储在 Broadcast State 中 2. 事件流（Data
+ * Stream）：读取当前规则集，对每个事件进行规则匹配预处理
+ *
+ * <p>
  * 输出：Tuple2<UserBehavior, RiskRule> 表示事件与匹配的规则对
  */
-public class DynamicRuleProcessor 
-        extends BroadcastProcessFunction<UserBehavior, RiskRule, Tuple2<UserBehavior, RiskRule>> {
+public class DynamicRuleProcessor
+        extends
+            BroadcastProcessFunction<UserBehavior, RiskRule, Tuple2<UserBehavior, RiskRule>> {
 
     private static final long serialVersionUID = 1L;
     private static final Logger LOG = LoggerFactory.getLogger(DynamicRuleProcessor.class);
 
-    /**
-     * 规则状态描述符（Broadcast State）
-     */
-    public static final MapStateDescriptor<String, RiskRule> RULE_STATE_DESCRIPTOR =
-            new MapStateDescriptor<>(
-                    "risk-rules",
-                    BasicTypeInfo.STRING_TYPE_INFO,
-                    TypeInformation.of(new TypeHint<RiskRule>() {})
-            );
+    /** 规则状态描述符（Broadcast State） */
+    public static final MapStateDescriptor<String, RiskRule> RULE_STATE_DESCRIPTOR = new MapStateDescriptor<>(
+            "risk-rules", BasicTypeInfo.STRING_TYPE_INFO, TypeInformation.of(new TypeHint<RiskRule>() {
+            }));
 
     @Override
-    public void processElement(
-            UserBehavior event,
+    public void processElement(UserBehavior event,
             BroadcastProcessFunction<UserBehavior, RiskRule, Tuple2<UserBehavior, RiskRule>>.ReadOnlyContext ctx,
             Collector<Tuple2<UserBehavior, RiskRule>> out) throws Exception {
-        
+
         if (event == null || !event.isValid()) {
             LOG.warn("Received invalid user behavior event, skipping: {}", event);
             return;
         }
 
         ReadOnlyBroadcastState<String, RiskRule> ruleState = ctx.getBroadcastState(RULE_STATE_DESCRIPTOR);
-        
+
         if (ruleState == null) {
             LOG.debug("Rule state is null, no rules loaded yet");
             return;
         }
 
         int matchedRuleCount = 0;
-        
+
         for (Map.Entry<String, RiskRule> entry : ruleState.immutableEntries()) {
             RiskRule rule = entry.getValue();
-            
+
             if (rule == null || !rule.isEnabled() || !rule.isValid()) {
                 continue;
             }
@@ -73,26 +69,24 @@ public class DynamicRuleProcessor
             if (isEventMatchRule(event, rule)) {
                 out.collect(Tuple2.of(event, rule));
                 matchedRuleCount++;
-                
+
                 if (LOG.isDebugEnabled()) {
-                    LOG.debug("Event matched rule: userId={}, actionType={}, ruleId={}, ruleType={}",
-                            event.getUserId(), event.getActionType(), rule.getRuleId(), rule.getRuleType());
+                    LOG.debug("Event matched rule: userId={}, actionType={}, ruleId={}, ruleType={}", event.getUserId(),
+                            event.getActionType(), rule.getRuleId(), rule.getRuleType());
                 }
             }
         }
 
         if (matchedRuleCount == 0 && LOG.isTraceEnabled()) {
-            LOG.trace("No rule matched for event: userId={}, actionType={}",
-                    event.getUserId(), event.getActionType());
+            LOG.trace("No rule matched for event: userId={}, actionType={}", event.getUserId(), event.getActionType());
         }
     }
 
     @Override
-    public void processBroadcastElement(
-            RiskRule rule,
+    public void processBroadcastElement(RiskRule rule,
             BroadcastProcessFunction<UserBehavior, RiskRule, Tuple2<UserBehavior, RiskRule>>.Context ctx,
             Collector<Tuple2<UserBehavior, RiskRule>> out) throws Exception {
-        
+
         if (rule == null) {
             LOG.warn("Received null rule from broadcast stream, skipping");
             return;
@@ -106,12 +100,12 @@ public class DynamicRuleProcessor
         }
 
         RiskRule existingRule = ruleState.get(rule.getRuleId());
-        
+
         if (RiskRule.RuleStatus.DISABLED.equals(rule.getStatus())) {
             if (existingRule != null) {
                 ruleState.remove(rule.getRuleId());
-                LOG.info("Rule disabled and removed from state: ruleId={}, ruleName={}",
-                        rule.getRuleId(), rule.getRuleName());
+                LOG.info("Rule disabled and removed from state: ruleId={}, ruleName={}", rule.getRuleId(),
+                        rule.getRuleName());
             }
             return;
         }
@@ -128,24 +122,17 @@ public class DynamicRuleProcessor
         }
 
         ruleState.put(rule.getRuleId(), rule);
-        
-        LOG.info("Rule {} in state: ruleId={}, ruleName={}, ruleType={}, targetActionType={}, " +
-                        "windowSize={}ms, threshold={}, version={}",
-                existingRule == null ? "added" : "updated",
-                rule.getRuleId(),
-                rule.getRuleName(),
-                rule.getRuleType(),
-                rule.getTargetActionType(),
-                rule.getWindowSizeMs(),
-                rule.getThreshold(),
-                rule.getVersion());
+
+        LOG.info(
+                "Rule {} in state: ruleId={}, ruleName={}, ruleType={}, targetActionType={}, "
+                        + "windowSize={}ms, threshold={}, version={}",
+                existingRule == null ? "added" : "updated", rule.getRuleId(), rule.getRuleName(), rule.getRuleType(),
+                rule.getTargetActionType(), rule.getWindowSizeMs(), rule.getThreshold(), rule.getVersion());
 
         logCurrentRuleState(ruleState);
     }
 
-    /**
-     * 判断事件是否匹配规则的行为类型
-     */
+    /** 判断事件是否匹配规则的行为类型 */
     private boolean isEventMatchRule(UserBehavior event, RiskRule rule) {
         if (event.getActionType() == null || rule.getTargetActionType() == null) {
             return false;
@@ -153,9 +140,7 @@ public class DynamicRuleProcessor
         return event.getActionType().equalsIgnoreCase(rule.getTargetActionType());
     }
 
-    /**
-     * 记录当前规则状态（调试用）
-     */
+    /** 记录当前规则状态（调试用） */
     private void logCurrentRuleState(BroadcastState<String, RiskRule> ruleState) throws Exception {
         if (!LOG.isDebugEnabled()) {
             return;

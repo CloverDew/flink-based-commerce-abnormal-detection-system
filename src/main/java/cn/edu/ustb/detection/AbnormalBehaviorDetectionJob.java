@@ -8,6 +8,7 @@ import cn.edu.ustb.detection.processor.DynamicRuleProcessor;
 import cn.edu.ustb.detection.serialization.AlertEventSerializationSchema;
 import cn.edu.ustb.detection.serialization.JsonDeserializationSchema;
 import cn.edu.ustb.detection.util.KeySelectorFactory;
+import java.time.Duration;
 import org.apache.flink.api.common.eventtime.SerializableTimestampAssigner;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.java.tuple.Tuple2;
@@ -24,30 +25,17 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.Duration;
-import java.util.Properties;
-
 /**
  * 电商异常用户行为实时检测系统 - 主任务入口
- * 
- * 系统架构：
- * 1. 用户行为事件流 (Kafka: user-behavior-topic)
- *    ↓
- * 2. Watermark 分配（Event Time + 乱序处理）
- *    ↓
- * 3. 与规则流（Broadcast State）连接
- *    ↓
- * 4. 动态规则匹配（DynamicRuleProcessor）
- *    ↓
- * 5. 异常模式检测（AbnormalPatternDetector）
- *    ↓
- * 6. 告警输出 (Kafka: alert-topic / Print)
- * 
- * 启动参数示例：
- * --kafka.bootstrap.servers localhost:9092
- * --kafka.behavior.topic user-behavior
- * --kafka.rule.topic risk-rules
- * --kafka.alert.topic alerts
+ *
+ * <p>
+ * 系统架构： 1. 用户行为事件流 (Kafka: user-behavior-topic) ↓ 2. Watermark 分配（Event Time +
+ * 乱序处理） ↓ 3. 与规则流（Broadcast State）连接 ↓ 4. 动态规则匹配（DynamicRuleProcessor） ↓ 5.
+ * 异常模式检测（AbnormalPatternDetector） ↓ 6. 告警输出 (Kafka: alert-topic / Print)
+ *
+ * <p>
+ * 启动参数示例： --kafka.bootstrap.servers localhost:9092 --kafka.behavior.topic
+ * user-behavior --kafka.rule.topic risk-rules --kafka.alert.topic alerts
  * --kafka.group.id flink-detection-group
  */
 public class AbnormalBehaviorDetectionJob {
@@ -64,7 +52,7 @@ public class AbnormalBehaviorDetectionJob {
         LOG.info("Starting Abnormal Behavior Detection Job...");
 
         ParameterTool params = ParameterTool.fromArgs(args);
-        
+
         String bootstrapServers = params.get("kafka.bootstrap.servers", DEFAULT_BOOTSTRAP_SERVERS);
         String behaviorTopic = params.get("kafka.behavior.topic", DEFAULT_BEHAVIOR_TOPIC);
         String ruleTopic = params.get("kafka.rule.topic", DEFAULT_RULE_TOPIC);
@@ -77,8 +65,7 @@ public class AbnormalBehaviorDetectionJob {
 
         StreamExecutionEnvironment env = createExecutionEnvironment(params);
 
-        DataStream<AlertEvent> alertStream = buildPipeline(
-                env, bootstrapServers, behaviorTopic, ruleTopic, groupId);
+        DataStream<AlertEvent> alertStream = buildPipeline(env, bootstrapServers, behaviorTopic, ruleTopic, groupId);
 
         if (enableKafkaSink) {
             KafkaSink<AlertEvent> kafkaSink = createKafkaSink(bootstrapServers, alertTopic);
@@ -92,9 +79,7 @@ public class AbnormalBehaviorDetectionJob {
         env.execute("E-commerce Abnormal Behavior Detection");
     }
 
-    /**
-     * 创建并配置 Flink 执行环境
-     */
+    /** 创建并配置 Flink 执行环境 */
     public static StreamExecutionEnvironment createExecutionEnvironment(ParameterTool params) {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
@@ -106,28 +91,19 @@ public class AbnormalBehaviorDetectionJob {
 
         int parallelism = params.getInt("parallelism", Runtime.getRuntime().availableProcessors());
         env.setParallelism(parallelism);
-        
-        LOG.info("Execution environment configured: parallelism={}, checkpoint interval=60s",
-                parallelism);
+
+        LOG.info("Execution environment configured: parallelism={}, checkpoint interval=60s", parallelism);
 
         return env;
     }
 
-    /**
-     * 构建处理拓扑
-     */
-    public static DataStream<AlertEvent> buildPipeline(
-            StreamExecutionEnvironment env,
-            String bootstrapServers,
-            String behaviorTopic,
-            String ruleTopic,
-            String groupId) {
+    /** 构建处理拓扑 */
+    public static DataStream<AlertEvent> buildPipeline(StreamExecutionEnvironment env, String bootstrapServers,
+            String behaviorTopic, String ruleTopic, String groupId) {
 
-        KafkaSource<UserBehavior> behaviorSource = createBehaviorSource(
-                bootstrapServers, behaviorTopic, groupId);
-        
-        KafkaSource<RiskRule> ruleSource = createRuleSource(
-                bootstrapServers, ruleTopic, groupId);
+        KafkaSource<UserBehavior> behaviorSource = createBehaviorSource(bootstrapServers, behaviorTopic, groupId);
+
+        KafkaSource<RiskRule> ruleSource = createRuleSource(bootstrapServers, ruleTopic, groupId);
 
         WatermarkStrategy<UserBehavior> watermarkStrategy = WatermarkStrategy
                 .<UserBehavior>forBoundedOutOfOrderness(Duration.ofSeconds(5))
@@ -140,90 +116,62 @@ public class AbnormalBehaviorDetectionJob {
                         }
                         return event.getTimestamp();
                     }
-                })
-                .withIdleness(Duration.ofMinutes(1));
+                }).withIdleness(Duration.ofMinutes(1));
 
         SingleOutputStreamOperator<UserBehavior> behaviorStream = env
-                .fromSource(behaviorSource, watermarkStrategy, "Kafka Behavior Source")
-                .filter(event -> {
+                .fromSource(behaviorSource, watermarkStrategy, "Kafka Behavior Source").filter(event -> {
                     if (event == null || !event.isValid()) {
                         LOG.warn("Filtered invalid event: {}", event);
                         return false;
                     }
                     return true;
-                })
-                .name("Filter Invalid Events");
+                }).name("Filter Invalid Events");
 
         DataStream<RiskRule> ruleStream = env
-                .fromSource(ruleSource,
-                        WatermarkStrategy.noWatermarks(),
-                        "Kafka Rule Source")
-                .filter(rule -> {
+                .fromSource(ruleSource, WatermarkStrategy.noWatermarks(), "Kafka Rule Source").filter(rule -> {
                     if (rule == null) {
                         LOG.warn("Filtered null rule");
                         return false;
                     }
                     return true;
-                })
-                .name("Filter Null Rules");
+                }).name("Filter Null Rules");
 
         BroadcastStream<RiskRule> broadcastRuleStream = ruleStream
                 .broadcast(DynamicRuleProcessor.RULE_STATE_DESCRIPTOR);
 
         SingleOutputStreamOperator<Tuple2<UserBehavior, RiskRule>> matchedStream = behaviorStream
-                .connect(broadcastRuleStream)
-                .process(new DynamicRuleProcessor())
-                .name("Dynamic Rule Processor");
+                .connect(broadcastRuleStream).process(new DynamicRuleProcessor()).name("Dynamic Rule Processor");
 
-        DataStream<AlertEvent> alertStream = matchedStream
-                .keyBy(KeySelectorFactory.createKeySelector())
-                .process(new AbnormalPatternDetector())
-                .name("Abnormal Pattern Detector");
+        DataStream<AlertEvent> alertStream = matchedStream.keyBy(KeySelectorFactory.createKeySelector())
+                .process(new AbnormalPatternDetector()).name("Abnormal Pattern Detector");
 
         LOG.info("Processing pipeline built successfully");
 
         return alertStream;
     }
 
-    /**
-     * 创建用户行为事件 Kafka Source
-     */
-    private static KafkaSource<UserBehavior> createBehaviorSource(
-            String bootstrapServers, String topic, String groupId) {
-        
-        return KafkaSource.<UserBehavior>builder()
-                .setBootstrapServers(bootstrapServers)
-                .setTopics(topic)
-                .setGroupId(groupId)
-                .setStartingOffsets(OffsetsInitializer.latest())
+    /** 创建用户行为事件 Kafka Source */
+    private static KafkaSource<UserBehavior> createBehaviorSource(String bootstrapServers, String topic,
+            String groupId) {
+
+        return KafkaSource.<UserBehavior>builder().setBootstrapServers(bootstrapServers).setTopics(topic)
+                .setGroupId(groupId).setStartingOffsets(OffsetsInitializer.latest())
                 .setValueOnlyDeserializer(new JsonDeserializationSchema<>(UserBehavior.class))
-                .setProperty("partition.discovery.interval.ms", "30000")
-                .build();
+                .setProperty("partition.discovery.interval.ms", "30000").build();
     }
 
-    /**
-     * 创建规则流 Kafka Source
-     */
-    private static KafkaSource<RiskRule> createRuleSource(
-            String bootstrapServers, String topic, String groupId) {
-        
-        return KafkaSource.<RiskRule>builder()
-                .setBootstrapServers(bootstrapServers)
-                .setTopics(topic)
-                .setGroupId(groupId + "-rules")
-                .setStartingOffsets(OffsetsInitializer.earliest())
-                .setValueOnlyDeserializer(new JsonDeserializationSchema<>(RiskRule.class))
-                .build();
+    /** 创建规则流 Kafka Source */
+    private static KafkaSource<RiskRule> createRuleSource(String bootstrapServers, String topic, String groupId) {
+
+        return KafkaSource.<RiskRule>builder().setBootstrapServers(bootstrapServers).setTopics(topic)
+                .setGroupId(groupId + "-rules").setStartingOffsets(OffsetsInitializer.earliest())
+                .setValueOnlyDeserializer(new JsonDeserializationSchema<>(RiskRule.class)).build();
     }
 
-    /**
-     * 创建告警 Kafka Sink
-     */
+    /** 创建告警 Kafka Sink */
     private static KafkaSink<AlertEvent> createKafkaSink(String bootstrapServers, String topic) {
-        return KafkaSink.<AlertEvent>builder()
-                .setBootstrapServers(bootstrapServers)
+        return KafkaSink.<AlertEvent>builder().setBootstrapServers(bootstrapServers)
                 .setRecordSerializer(new AlertEventSerializationSchema(topic))
-                .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
-                .build();
+                .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE).build();
     }
 }

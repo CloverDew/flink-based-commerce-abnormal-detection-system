@@ -10,86 +10,57 @@ import java.util.UUID;
 
 /**
  * 告警事件实体类
- * 
- * 表示检测到异常行为后生成的告警事件，包含触发规则、匹配事件、告警级别等信息。
- * 用于输出到下游系统（如 Kafka、数据库、告警平台等）。
+ *
+ * <p>
+ * 表示检测到异常行为后生成的告警事件，包含触发规则、匹配事件、告警级别等信息。 用于输出到下游系统（如 Kafka、数据库、告警平台等）。
  */
 public class AlertEvent implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
-    private static final DateTimeFormatter FORMATTER = DateTimeFormatter
-            .ofPattern("yyyy-MM-dd HH:mm:ss")
+    private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
             .withZone(ZoneId.systemDefault());
 
-    /**
-     * 告警唯一标识
-     */
+    /** 告警唯一标识 */
     private String alertId;
 
-    /**
-     * 触发的规则ID
-     */
+    /** 触发的规则ID */
     private String ruleId;
 
-    /**
-     * 规则类型
-     */
+    /** 规则类型 */
     private RiskRule.RuleType ruleType;
 
-    /**
-     * 告警级别
-     */
+    /** 告警级别 */
     private AlertLevel level;
 
-    /**
-     * 关联的用户ID
-     */
+    /** 关联的用户ID */
     private String userId;
 
-    /**
-     * 关联的IP地址
-     */
+    /** 关联的IP地址 */
     private String ip;
 
-    /**
-     * 关联的设备ID
-     */
+    /** 关联的设备ID */
     private String deviceId;
 
-    /**
-     * 触发告警的事件列表（匹配到的行为序列）
-     */
+    /** 触发告警的事件列表（匹配到的行为序列） */
     private List<UserBehavior> triggerEvents;
 
-    /**
-     * 匹配到的事件数量
-     */
+    /** 匹配到的事件数量 */
     private int matchCount;
 
-    /**
-     * 告警生成时间戳
-     */
+    /** 告警生成时间戳 */
     private long alertTimestamp;
 
-    /**
-     * 第一个触发事件的时间戳
-     */
+    /** 第一个触发事件的时间戳 */
     private long firstEventTimestamp;
 
-    /**
-     * 最后一个触发事件的时间戳
-     */
+    /** 最后一个触发事件的时间戳 */
     private long lastEventTimestamp;
 
-    /**
-     * 告警描述信息
-     */
+    /** 告警描述信息 */
     private String message;
 
-    /**
-     * 扩展信息（JSON格式）
-     */
+    /** 扩展信息（JSON格式） */
     private String extra;
 
     public AlertEvent() {
@@ -142,13 +113,8 @@ public class AlertEvent implements Serializable {
                 FORMATTER.format(Instant.ofEpochMilli(events.get(0).getTimestamp())),
                 FORMATTER.format(Instant.ofEpochMilli(events.get(events.size() - 1).getTimestamp())));
 
-        return String.format("[%s] 检测到异常行为：用户[%s] IP[%s] 在时间段[%s]内触发规则[%s]，匹配事件数：%d，阈值：%d",
-                rule.getRuleType(),
-                firstEvent.getUserId(),
-                firstEvent.getIp(),
-                timeRange,
-                rule.getRuleName(),
-                events.size(),
+        return String.format("[%s] 检测到异常行为：用户[%s] IP[%s] 在时间段[%s]内触发规则[%s]，匹配事件数：%d，阈值：%d", rule.getRuleType(),
+                firstEvent.getUserId(), firstEvent.getIp(), timeRange, rule.getRuleName(), events.size(),
                 rule.getThreshold());
     }
 
@@ -266,8 +232,10 @@ public class AlertEvent implements Serializable {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+        if (this == o)
+            return true;
+        if (o == null || getClass() != o.getClass())
+            return false;
         AlertEvent that = (AlertEvent) o;
         return Objects.equals(alertId, that.alertId);
     }
@@ -279,27 +247,15 @@ public class AlertEvent implements Serializable {
 
     @Override
     public String toString() {
-        return "AlertEvent{" +
-                "alertId='" + alertId + '\'' +
-                ", ruleId='" + ruleId + '\'' +
-                ", ruleType=" + ruleType +
-                ", level=" + level +
-                ", userId='" + userId + '\'' +
-                ", ip='" + ip + '\'' +
-                ", matchCount=" + matchCount +
-                ", alertTimestamp=" + FORMATTER.format(Instant.ofEpochMilli(alertTimestamp)) +
-                ", message='" + message + '\'' +
-                '}';
+        return "AlertEvent{" + "alertId='" + alertId + '\'' + ", ruleId='" + ruleId + '\'' + ", ruleType=" + ruleType
+                + ", level=" + level + ", userId='" + userId + '\'' + ", ip='" + ip + '\'' + ", matchCount="
+                + matchCount + ", alertTimestamp=" + FORMATTER.format(Instant.ofEpochMilli(alertTimestamp))
+                + ", message='" + message + '\'' + '}';
     }
 
-    /**
-     * 告警级别枚举
-     */
+    /** 告警级别枚举 */
     public enum AlertLevel {
-        LOW(1, "低"),
-        MEDIUM(2, "中"),
-        HIGH(3, "高"),
-        CRITICAL(4, "严重");
+        LOW(1, "低"), MEDIUM(2, "中"), HIGH(3, "高"), CRITICAL(4, "严重");
 
         private final int value;
         private final String description;

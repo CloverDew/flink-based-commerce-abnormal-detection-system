@@ -5,19 +5,18 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import java.nio.charset.StandardCharsets;
+import javax.annotation.Nullable;
 import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.annotation.Nullable;
-import java.nio.charset.StandardCharsets;
-
 /**
  * 告警事件 Kafka 序列化器
- * 
- * 将 AlertEvent 对象序列化为 JSON 格式并发送到 Kafka。
- * 使用 userId 作为分区键，确保同一用户的告警发送到同一分区。
+ *
+ * <p>
+ * 将 AlertEvent 对象序列化为 JSON 格式并发送到 Kafka。 使用 userId 作为分区键，确保同一用户的告警发送到同一分区。
  */
 public class AlertEventSerializationSchema implements KafkaRecordSerializationSchema<AlertEvent> {
 
@@ -59,8 +58,8 @@ public class AlertEventSerializationSchema implements KafkaRecordSerializationSc
                     : alert.getAlertId().getBytes(StandardCharsets.UTF_8);
 
             if (LOG.isDebugEnabled()) {
-                LOG.debug("Serialized alert event: alertId={}, ruleId={}, userId={}",
-                        alert.getAlertId(), alert.getRuleId(), alert.getUserId());
+                LOG.debug("Serialized alert event: alertId={}, ruleId={}, userId={}", alert.getAlertId(),
+                        alert.getRuleId(), alert.getUserId());
             }
 
             return new ProducerRecord<>(topic, null, alert.getAlertTimestamp(), key, value);

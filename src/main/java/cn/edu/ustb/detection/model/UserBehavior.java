@@ -5,9 +5,10 @@ import java.util.Objects;
 
 /**
  * 用户行为事件实体类
- * 
- * 表示从 Kafka 接收的用户行为日志，包含用户ID、行为类型、IP地址、时间戳等信息。
- * 用于 Flink DataStream 处理和 CEP 模式匹配。
+ *
+ * <p>
+ * 表示从 Kafka 接收的用户行为日志，包含用户ID、行为类型、IP地址、时间戳等信息。 用于 Flink DataStream 处理和 CEP
+ * 模式匹配。
  */
 public class UserBehavior implements Serializable {
 
@@ -109,24 +110,20 @@ public class UserBehavior implements Serializable {
         this.extra = extra;
     }
 
-    /**
-     * 校验事件数据是否有效
-     */
+    /** 校验事件数据是否有效 */
     public boolean isValid() {
-        return userId != null && !userId.isEmpty()
-                && actionType != null && !actionType.isEmpty()
-                && timestamp > 0;
+        return userId != null && !userId.isEmpty() && actionType != null && !actionType.isEmpty() && timestamp > 0;
     }
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+        if (this == o)
+            return true;
+        if (o == null || getClass() != o.getClass())
+            return false;
         UserBehavior that = (UserBehavior) o;
-        return timestamp == that.timestamp
-                && Objects.equals(userId, that.userId)
-                && Objects.equals(actionType, that.actionType)
-                && Objects.equals(ip, that.ip)
+        return timestamp == that.timestamp && Objects.equals(userId, that.userId)
+                && Objects.equals(actionType, that.actionType) && Objects.equals(ip, that.ip)
                 && Objects.equals(sessionId, that.sessionId);
     }
 
@@ -137,16 +134,9 @@ public class UserBehavior implements Serializable {
 
     @Override
     public String toString() {
-        return "UserBehavior{" +
-                "userId='" + userId + '\'' +
-                ", actionType='" + actionType + '\'' +
-                ", ip='" + ip + '\'' +
-                ", timestamp=" + timestamp +
-                ", sessionId='" + sessionId + '\'' +
-                ", deviceId='" + deviceId + '\'' +
-                ", productId='" + productId + '\'' +
-                ", amount=" + amount +
-                '}';
+        return "UserBehavior{" + "userId='" + userId + '\'' + ", actionType='" + actionType + '\'' + ", ip='" + ip
+                + '\'' + ", timestamp=" + timestamp + ", sessionId='" + sessionId + '\'' + ", deviceId='" + deviceId
+                + '\'' + ", productId='" + productId + '\'' + ", amount=" + amount + '}';
     }
 
     public static class Builder {

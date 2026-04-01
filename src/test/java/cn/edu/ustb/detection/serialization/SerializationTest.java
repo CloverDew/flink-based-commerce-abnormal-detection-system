@@ -1,19 +1,16 @@
 package cn.edu.ustb.detection.serialization;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import cn.edu.ustb.detection.model.RiskRule;
 import cn.edu.ustb.detection.model.UserBehavior;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.nio.charset.StandardCharsets;
-
-import static org.junit.jupiter.api.Assertions.*;
-
-/**
- * 序列化/反序列化测试
- */
+/** 序列化/反序列化测试 */
 public class SerializationTest {
 
     private JsonDeserializationSchema<UserBehavior> behaviorDeserializer;
@@ -30,14 +27,9 @@ public class SerializationTest {
     @Test
     @DisplayName("Should deserialize valid UserBehavior JSON")
     void testDeserializeUserBehavior() throws Exception {
-        String json = "{" +
-                "\"userId\":\"user123\"," +
-                "\"actionType\":\"LOGIN\"," +
-                "\"ip\":\"192.168.1.1\"," +
-                "\"timestamp\":1700000000000," +
-                "\"sessionId\":\"session-abc\"," +
-                "\"deviceId\":\"device-xyz\"" +
-                "}";
+        String json = "{" + "\"userId\":\"user123\"," + "\"actionType\":\"LOGIN\"," + "\"ip\":\"192.168.1.1\","
+                + "\"timestamp\":1700000000000," + "\"sessionId\":\"session-abc\"," + "\"deviceId\":\"device-xyz\""
+                + "}";
 
         UserBehavior event = behaviorDeserializer.deserialize(json.getBytes(StandardCharsets.UTF_8));
 
@@ -53,18 +45,10 @@ public class SerializationTest {
     @Test
     @DisplayName("Should deserialize valid RiskRule JSON")
     void testDeserializeRiskRule() throws Exception {
-        String json = "{" +
-                "\"ruleId\":\"rule-001\"," +
-                "\"ruleName\":\"Credential Stuffing Detection\"," +
-                "\"ruleType\":\"CREDENTIAL_STUFFING\"," +
-                "\"status\":\"ENABLED\"," +
-                "\"targetActionType\":\"LOGIN_FAIL\"," +
-                "\"windowSizeMs\":60000," +
-                "\"threshold\":3," +
-                "\"groupKeyType\":\"BY_IP\"," +
-                "\"priority\":10," +
-                "\"version\":1" +
-                "}";
+        String json = "{" + "\"ruleId\":\"rule-001\"," + "\"ruleName\":\"Credential Stuffing Detection\","
+                + "\"ruleType\":\"CREDENTIAL_STUFFING\"," + "\"status\":\"ENABLED\","
+                + "\"targetActionType\":\"LOGIN_FAIL\"," + "\"windowSizeMs\":60000," + "\"threshold\":3,"
+                + "\"groupKeyType\":\"BY_IP\"," + "\"priority\":10," + "\"version\":1" + "}";
 
         RiskRule rule = ruleDeserializer.deserialize(json.getBytes(StandardCharsets.UTF_8));
 
@@ -106,13 +90,8 @@ public class SerializationTest {
     @Test
     @DisplayName("Should ignore unknown properties")
     void testIgnoreUnknownProperties() throws Exception {
-        String json = "{" +
-                "\"userId\":\"user123\"," +
-                "\"actionType\":\"LOGIN\"," +
-                "\"ip\":\"192.168.1.1\"," +
-                "\"timestamp\":1700000000000," +
-                "\"unknownField\":\"should be ignored\"" +
-                "}";
+        String json = "{" + "\"userId\":\"user123\"," + "\"actionType\":\"LOGIN\"," + "\"ip\":\"192.168.1.1\","
+                + "\"timestamp\":1700000000000," + "\"unknownField\":\"should be ignored\"" + "}";
 
         UserBehavior event = behaviorDeserializer.deserialize(json.getBytes(StandardCharsets.UTF_8));
 
@@ -123,14 +102,9 @@ public class SerializationTest {
     @Test
     @DisplayName("Should handle unknown enum values gracefully")
     void testUnknownEnumValue() throws Exception {
-        String json = "{" +
-                "\"ruleId\":\"rule-001\"," +
-                "\"ruleName\":\"Test Rule\"," +
-                "\"ruleType\":\"UNKNOWN_TYPE\"," +
-                "\"targetActionType\":\"LOGIN_FAIL\"," +
-                "\"windowSizeMs\":60000," +
-                "\"threshold\":3" +
-                "}";
+        String json = "{" + "\"ruleId\":\"rule-001\"," + "\"ruleName\":\"Test Rule\","
+                + "\"ruleType\":\"UNKNOWN_TYPE\"," + "\"targetActionType\":\"LOGIN_FAIL\"," + "\"windowSizeMs\":60000,"
+                + "\"threshold\":3" + "}";
 
         RiskRule rule = ruleDeserializer.deserialize(json.getBytes(StandardCharsets.UTF_8));
 
@@ -142,11 +116,8 @@ public class SerializationTest {
     @Test
     @DisplayName("Should handle partial JSON (missing optional fields)")
     void testPartialJson() throws Exception {
-        String json = "{" +
-                "\"userId\":\"user123\"," +
-                "\"actionType\":\"LOGIN\"," +
-                "\"timestamp\":1700000000000" +
-                "}";
+        String json = "{" + "\"userId\":\"user123\"," + "\"actionType\":\"LOGIN\"," + "\"timestamp\":1700000000000"
+                + "}";
 
         UserBehavior event = behaviorDeserializer.deserialize(json.getBytes(StandardCharsets.UTF_8));
 
