@@ -86,8 +86,8 @@ public class KaggleRuleTemplateGenerator {
                 GroupKeyType.BY_SESSION_ID, 10, version, now, "同一会话20秒内>=50次浏览"));
         rules.add(rule("cs-order-brush", "Clickstream-疑似刷单", RuleType.ORDER_BRUSH, "ORDER", 180000L, 6,
                 GroupKeyType.BY_USER_ID, 20, version, now, "同一用户3分钟>=6次下单"));
-        rules.add(rule("cs-abnormal-login", "Clickstream-异常登录后敏感行为", RuleType.ABNORMAL_LOGIN, "LOGIN", 60000L, 2,
-                GroupKeyType.BY_USER_ID, 30, version, now, "登录后短时间出现敏感行为"));
+        rules.add(rule("cs-cart-burst", "Clickstream-高频加购", RuleType.HIGH_FREQ_ACCESS, "ADD_CART", 60000L, 15,
+                GroupKeyType.BY_USER_ID, 30, version, now, "同一用户1分钟内>=15次加购"));
         return rules;
     }
 

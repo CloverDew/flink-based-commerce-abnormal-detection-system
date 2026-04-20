@@ -5,37 +5,26 @@
 ## 系统架构
 
 ```
-┌─────────────────┐    ┌─────────────────┐
-│  User Behavior  │    │   Risk Rules    │
-│  Kafka Topic    │    │  Kafka Topic    │
-└────────┬────────┘    └────────┬────────┘
-         │                      │
-         ▼                      ▼
-┌─────────────────────────────────────────┐
-│           Flink DataStream Job          │
-│  ┌───────────────────────────────────┐  │
-│  │   Watermark & Event Time Setup    │  │
-│  └───────────────────────────────────┘  │
-│                    │                    │
-│  ┌─────────────────┼─────────────────┐  │
-│  │     Broadcast State (Rules)       │  │
-│  │  ┌─────────────────────────────┐  │  │
-│  │  │   DynamicRuleProcessor      │  │  │
-│  │  │   (Rule Hot Reload)         │  │  │
-│  │  └─────────────────────────────┘  │  │
-│  └───────────────────────────────────┘  │
-│                    │                    │
-│  ┌───────────────────────────────────┐  │
-│  │   AbnormalPatternDetector         │  │
-│  │   (Keyed State + Timer)           │  │
-│  └───────────────────────────────────┘  │
-└────────────────────┬────────────────────┘
-                     │
-                     ▼
-          ┌─────────────────┐
-          │  Alert Events   │
-          │  (Kafka/Print)  │
-          └─────────────────┘
+Kaggle CSV
+   │
+   ├─(KaggleCsvBootstrapTool)──────────────► Kafka: user-behavior
+   │
+   └─(KaggleRuleTemplateGenerator + JsonFileKafkaPublisher)► Kafka: risk-rules
+                                                   │
+                                                   ▼
+                                  ┌─────────────────────────────────────┐
+                                  │ Flink Job (DataStream + Broadcast) │
+                                  │ - Event Time + Watermark           │
+                                  │ - DynamicRuleProcessor             │
+                                  │ - AbnormalPatternDetector          │
+                                  └────────────────┬────────────────────┘
+                                                   │
+                                                   ▼
+                                         Kafka: alerts / PrintSink
+
+Runtime Config:
+- docker/conf/bootstrap.conf    (数据导入参数)
+- docker/conf/flink-job.conf    (并行度、状态后端、checkpoint 参数)
 ```
 
 ## 核心功能
@@ -78,6 +67,27 @@
 - [E-commerce behavior data from multi category store](https://www.kaggle.com/datasets/mkechinov/ecommerce-behavior-data-from-multi-category-store)
 - [Clickstream Data for Online Shopping](https://www.kaggle.com/datasets/tunguz/clickstream-data-for-online-shopping)
 - [IEEE-CIS Fraud Detection](https://www.kaggle.com/c/ieee-fraud-detection/data)
+
+## 本项目采用的数据集（推荐）
+
+为了最容易跑通并复现实验，建议优先使用：
+
+- [E-commerce behavior data from multi category store](https://www.kaggle.com/datasets/mkechinov/ecommerce-behavior-data-from-multi-category-store)
+
+最符合本项目的一条直达链接（建议优先下载这个）：
+
+- **Kaggle 数据集直达**：<https://www.kaggle.com/datasets/mkechinov/ecommerce-behavior-data-from-multi-category-store>
+- 下载后建议放到：`./data/kaggle-events.csv`
+
+对应导入 profile：
+
+- `PROFILE=multi_category`
+
+原因：
+
+- 字段与项目模型最贴近（`event_time`、`event_type`、`user_id`、`user_session`、`product_id`）
+- 能稳定触发至少 3 类异常规则（登录失败突增/高频下单/高频加购或浏览）
+- 不需要额外手工清洗即可进入 Kafka
 
 ### 字段映射（已在代码中兼容）
 
@@ -269,49 +279,58 @@ docker compose up -d zookeeper kafka jobmanager taskmanager
 docker compose run --rm runner bash /workspace/docker/scripts/build-jar.sh
 ```
 
-### 3) 在 Docker 内提交 Flink 任务
+### 3) 准备配置文件（推荐）
 
-```bash
-docker compose run --rm \
-  -e KAFKA_BOOTSTRAP=kafka:9092 \
-  -e ENABLE_KAFKA_SINK=true \
-  runner \
-  bash -lc "flink run -m jobmanager:8081 -d \
-    /workspace/target/flink-based-commerce-abnormal-detection-system-1.0-SNAPSHOT.jar \
-    --kafka.bootstrap.servers kafka:9092 \
-    --kafka.behavior.topic user-behavior \
-    --kafka.rule.topic risk-rules \
-    --kafka.alert.topic alerts \
-    --kafka.sink.enabled true \
-    --parallelism 2"
-```
+编辑：
 
-也可以使用脚本（在 Flink 镜像里执行）：
+- `docker/conf/flink-job.conf`
+- `docker/conf/bootstrap.conf`
+
+最常用参数：
+
+- `PROFILE=multi_category`
+- `INPUT_CSV=/workspace/data/kaggle-events.csv`
+- `PARALLELISM=2`
+- `STATE_BACKEND=hashmap`（或 `rocksdb`）
+
+### 4) 在 Docker 内提交 Flink 任务（自动读取 .conf）
 
 ```bash
 docker compose run --rm --entrypoint /bin/bash jobmanager \
   -lc "/workspace/docker/scripts/submit-flink-job.sh"
 ```
 
-### 4) 在 Docker 内导入 Kaggle 数据 + 下发规则
-
-把你的 Kaggle CSV 放到项目目录，例如：`./data/kaggle-events.csv`
+### 5) 在 Docker 内导入 Kaggle 数据 + 下发规则（自动读取 .conf）
 
 ```bash
-docker compose run --rm \
-  -e INPUT_CSV=/workspace/data/kaggle-events.csv \
-  -e PROFILE=multi_category \
-  -e RULE_VERSION=1 \
-  -e KAFKA_BOOTSTRAP=kafka:9092 \
-  runner \
+docker compose run --rm runner \
   bash /workspace/docker/scripts/bootstrap-kaggle.sh
 ```
 
-### 5) 一键端到端（构建 + 提交任务 + 导数）
+### 6) 一键端到端（构建 + 提交任务 + 导数）
 
 ```bash
 docker compose run --rm --entrypoint /bin/bash jobmanager \
   -lc "/workspace/docker/scripts/run-e2e.sh"
+```
+
+### 最短可执行路径（建议直接用）
+
+```bash
+# 0. 准备数据
+# 把 Kaggle CSV 放到 ./data/kaggle-events.csv
+
+# 1. 启动基础服务
+docker compose up -d zookeeper kafka jobmanager taskmanager
+
+# 2. 构建
+docker compose run --rm runner bash /workspace/docker/scripts/build-jar.sh
+
+# 3. 提交 Flink 任务
+docker compose run --rm --entrypoint /bin/bash jobmanager -lc "/workspace/docker/scripts/submit-flink-job.sh"
+
+# 4. 导入规则 + 行为数据
+docker compose run --rm runner bash /workspace/docker/scripts/bootstrap-kaggle.sh
 ```
 
 ### 脚本说明
@@ -320,6 +339,46 @@ docker compose run --rm --entrypoint /bin/bash jobmanager \
 - `docker/scripts/submit-flink-job.sh`：提交 Flink 作业
 - `docker/scripts/bootstrap-kaggle.sh`：生成规则模板、发布规则、导入 Kaggle 行为数据
 - `docker/scripts/run-e2e.sh`：一键串行执行
+
+### `.conf` 配置化启动（推荐）
+
+已提供两个配置文件：
+
+- `docker/conf/flink-job.conf`：并行度、状态后端、checkpoint 参数
+- `docker/conf/bootstrap.conf`：数据导入 profile、输入文件、规则版本等
+
+脚本会在启动时自动加载：
+
+- `submit-flink-job.sh` 默认加载 `docker/conf/flink-job.conf`
+- `bootstrap-kaggle.sh` 默认加载 `docker/conf/bootstrap.conf`
+
+你也可以指定其他配置文件：
+
+```bash
+docker compose run --rm --entrypoint /bin/bash \
+  -e CONF_FILE=/workspace/docker/conf/flink-job.conf \
+  jobmanager -lc "/workspace/docker/scripts/submit-flink-job.sh"
+```
+
+## 参数影响与观测建议
+
+当前框架基于“规则 + 时间窗口计数”模型，稳定可覆盖至少 3 类异常（如登录失败突增、高频下单、高频加购/浏览）。
+
+### 调参建议
+
+- `PARALLELISM`：提高可提升吞吐，但会增加资源占用和 checkpoint 开销
+- `STATE_BACKEND=rocksdb`：大状态更稳，延迟略升；`hashmap` 延迟更低但内存压力更大
+- `CHECKPOINT_INTERVAL_MS`：更短恢复点更密集，但 I/O 开销更高
+- `CHECKPOINT_TIMEOUT_MS`：过小会导致频繁 checkpoint 失败
+- `CHECKPOINT_UNALIGNED_ENABLED=true`：高背压时可提升 checkpoint 成功率
+
+### 建议重点观察指标（CK/Checkpoint）
+
+- Checkpoint Duration（持续时间）
+- Checkpoint Failed / Completed 次数
+- End-to-End Latency
+- Backpressure 状态
+- Kafka consumer lag（规则流与行为流）
 
 ## 配置参数
 

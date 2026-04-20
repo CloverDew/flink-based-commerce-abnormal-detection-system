@@ -3,6 +3,13 @@ set -euo pipefail
 
 cd /workspace
 
+CONF_FILE="${CONF_FILE:-/workspace/docker/conf/bootstrap.conf}"
+if [[ -f "${CONF_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  source "${CONF_FILE}"
+  echo "[bootstrap-kaggle] loaded config: ${CONF_FILE}"
+fi
+
 KAFKA_BOOTSTRAP="${KAFKA_BOOTSTRAP:-kafka:9092}"
 BEHAVIOR_TOPIC="${BEHAVIOR_TOPIC:-user-behavior}"
 RULE_TOPIC="${RULE_TOPIC:-risk-rules}"

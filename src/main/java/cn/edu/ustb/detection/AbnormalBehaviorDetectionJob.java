@@ -13,15 +13,18 @@ import org.apache.flink.api.common.eventtime.SerializableTimestampAssigner;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.utils.ParameterTool;
+import org.apache.flink.contrib.streaming.state.EmbeddedRocksDBStateBackend;
 import org.apache.flink.connector.base.DeliveryGuarantee;
 import org.apache.flink.connector.kafka.sink.KafkaSink;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.streaming.api.CheckpointingMode;
+import org.apache.flink.streaming.api.environment.CheckpointConfig.ExternalizedCheckpointCleanup;
 import org.apache.flink.streaming.api.datastream.BroadcastStream;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.runtime.state.hashmap.HashMapStateBackend;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -83,18 +86,56 @@ public class AbnormalBehaviorDetectionJob {
     public static StreamExecutionEnvironment createExecutionEnvironment(ParameterTool params) {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
-        env.enableCheckpointing(60_000L, CheckpointingMode.EXACTLY_ONCE);
-        env.getCheckpointConfig().setCheckpointTimeout(120_000L);
-        env.getCheckpointConfig().setMinPauseBetweenCheckpoints(30_000L);
-        env.getCheckpointConfig().setMaxConcurrentCheckpoints(1);
-        env.getCheckpointConfig().setTolerableCheckpointFailureNumber(3);
-
         int parallelism = params.getInt("parallelism", Runtime.getRuntime().availableProcessors());
+        long checkpointIntervalMs = params.getLong("checkpoint.interval.ms", 60_000L);
+        long checkpointTimeoutMs = params.getLong("checkpoint.timeout.ms", 120_000L);
+        long checkpointMinPauseMs = params.getLong("checkpoint.min.pause.ms", 30_000L);
+        int checkpointMaxConcurrent = params.getInt("checkpoint.max.concurrent", 1);
+        int checkpointTolerableFailures = params.getInt("checkpoint.tolerable.failures", 3);
+        boolean checkpointUnaligned = params.getBoolean("checkpoint.unaligned.enabled", false);
+        boolean externalizedRetained = params.getBoolean("checkpoint.externalized.retained", true);
+        String checkpointStorage = params.get("checkpoint.storage", "");
+        String stateBackend = params.get("state.backend", "hashmap");
+
+        configureStateBackend(env, stateBackend, checkpointStorage);
+        configureCheckpoint(env, checkpointIntervalMs, checkpointTimeoutMs, checkpointMinPauseMs,
+                checkpointMaxConcurrent, checkpointTolerableFailures, checkpointUnaligned, externalizedRetained);
         env.setParallelism(parallelism);
 
-        LOG.info("Execution environment configured: parallelism={}, checkpoint interval=60s", parallelism);
+        LOG.info(
+                "Execution environment configured: parallelism={}, stateBackend={}, ck.interval={}ms, ck.timeout={}ms, ck.minPause={}ms",
+                parallelism, stateBackend, checkpointIntervalMs, checkpointTimeoutMs, checkpointMinPauseMs);
 
         return env;
+    }
+
+    private static void configureStateBackend(StreamExecutionEnvironment env, String backendType,
+            String checkpointStorage) {
+        if ("rocksdb".equalsIgnoreCase(backendType)) {
+            env.setStateBackend(new EmbeddedRocksDBStateBackend(true));
+        } else {
+            env.setStateBackend(new HashMapStateBackend());
+        }
+
+        if (checkpointStorage != null && !checkpointStorage.trim().isEmpty()) {
+            env.getCheckpointConfig().setCheckpointStorage(checkpointStorage.trim());
+            LOG.info("Configured checkpoint storage: {}", checkpointStorage);
+        }
+    }
+
+    private static void configureCheckpoint(StreamExecutionEnvironment env, long intervalMs, long timeoutMs,
+            long minPauseMs, int maxConcurrent, int tolerableFailures, boolean unaligned,
+            boolean externalizedRetained) {
+        env.enableCheckpointing(intervalMs, CheckpointingMode.EXACTLY_ONCE);
+        env.getCheckpointConfig().setCheckpointTimeout(timeoutMs);
+        env.getCheckpointConfig().setMinPauseBetweenCheckpoints(minPauseMs);
+        env.getCheckpointConfig().setMaxConcurrentCheckpoints(maxConcurrent);
+        env.getCheckpointConfig().setTolerableCheckpointFailureNumber(tolerableFailures);
+        env.getCheckpointConfig().enableUnalignedCheckpoints(unaligned);
+        env.getCheckpointConfig()
+                .setExternalizedCheckpointCleanup(externalizedRetained
+                        ? ExternalizedCheckpointCleanup.RETAIN_ON_CANCELLATION
+                        : ExternalizedCheckpointCleanup.DELETE_ON_CANCELLATION);
     }
 
     /** 构建处理拓扑 */

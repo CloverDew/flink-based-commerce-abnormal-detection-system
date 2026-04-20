@@ -35,9 +35,6 @@ public class AbnormalPatternDetector extends KeyedProcessFunction<String, Tuple2
     /** 存储每个规则对应的事件列表 Key: ruleId, Value: 事件列表（按时间戳排序） */
     private transient MapState<String, List<UserBehavior>> eventsByRuleState;
 
-    /** 存储每个规则的最后清理时间（用于过期事件清理） */
-    private transient MapState<String, Long> lastCleanupTimeState;
-
     /** 存储当前有效的规则配置 Key: ruleId, Value: 规则 */
     private transient MapState<String, RiskRule> activeRulesState;
 
@@ -54,9 +51,6 @@ public class AbnormalPatternDetector extends KeyedProcessFunction<String, Tuple2
         eventsByRuleState = getRuntimeContext().getMapState(new MapStateDescriptor<>("events-by-rule",
                 TypeInformation.of(String.class), TypeInformation.of(new TypeHint<List<UserBehavior>>() {
                 })));
-
-        lastCleanupTimeState = getRuntimeContext().getMapState(new MapStateDescriptor<>("last-cleanup-time",
-                TypeInformation.of(String.class), TypeInformation.of(Long.class)));
 
         activeRulesState = getRuntimeContext().getMapState(new MapStateDescriptor<>("active-rules",
                 TypeInformation.of(String.class), TypeInformation.of(RiskRule.class)));

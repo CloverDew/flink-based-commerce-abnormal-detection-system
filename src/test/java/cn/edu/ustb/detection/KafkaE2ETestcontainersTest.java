@@ -7,10 +7,13 @@ import cn.edu.ustb.detection.model.AlertEvent;
 import cn.edu.ustb.detection.model.RiskRule;
 import cn.edu.ustb.detection.model.UserBehavior;
 import cn.edu.ustb.detection.serialization.AlertEventSerializationSchema;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -29,7 +32,6 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
@@ -53,13 +55,6 @@ public class KafkaE2ETestcontainersTest {
 
     @Container
     private static final KafkaContainer KAFKA = new KafkaContainer(DockerImageName.parse("apache/kafka-native:3.8.0"));
-
-    @AfterAll
-    static void tearDown() {
-        if (KAFKA != null && KAFKA.isRunning()) {
-            KAFKA.stop();
-        }
-    }
 
     @Test
     @DisplayName("E2E with Kafka Testcontainers should produce alerts")
@@ -85,6 +80,8 @@ public class KafkaE2ETestcontainersTest {
                 "Expected alert to include rule id");
 
         LOG.info("Captured alerts: {}", alerts.size());
+        LOG.info("Alert summaries: {}", summarizeAlerts(alerts));
+        LOG.info("Rule aggregate table:\n{}", buildRuleAggregateTable(alerts));
         jobClient.cancel().get(10, TimeUnit.SECONDS);
     }
 
@@ -158,5 +155,52 @@ public class KafkaE2ETestcontainersTest {
             }
         }
         return values;
+    }
+
+    private static List<String> summarizeAlerts(List<String> rawAlerts) {
+        List<String> summaries = new ArrayList<>();
+        for (String raw : rawAlerts) {
+            try {
+                JsonNode node = MAPPER.readTree(raw);
+                String ruleId = node.path("ruleId").asText("unknown-rule");
+                String userId = node.path("userId").asText("unknown-user");
+                String ip = node.path("ip").asText("unknown-ip");
+                int matchCount = node.path("matchCount").asInt(-1);
+                String message = node.path("message").asText("");
+                summaries.add(String.format("rule=%s user=%s ip=%s matchCount=%d msg=%s", ruleId, userId, ip,
+                        matchCount, message));
+            } catch (Exception e) {
+                summaries.add("parse-failed: " + raw);
+            }
+        }
+        return summaries;
+    }
+
+    private static String buildRuleAggregateTable(List<String> rawAlerts) {
+        Map<String, Integer> ruleCount = new LinkedHashMap<>();
+        Map<String, Integer> ruleMatchTotal = new LinkedHashMap<>();
+
+        for (String raw : rawAlerts) {
+            try {
+                JsonNode node = MAPPER.readTree(raw);
+                String ruleId = node.path("ruleId").asText("unknown-rule");
+                int matchCount = node.path("matchCount").asInt(0);
+                ruleCount.put(ruleId, ruleCount.getOrDefault(ruleId, 0) + 1);
+                ruleMatchTotal.put(ruleId, ruleMatchTotal.getOrDefault(ruleId, 0) + matchCount);
+            } catch (Exception ignore) {
+                ruleCount.put("parse-failed", ruleCount.getOrDefault("parse-failed", 0) + 1);
+            }
+        }
+
+        StringBuilder table = new StringBuilder();
+        table.append(String.format("%-34s | %-12s | %-16s%n", "ruleId", "alertCount", "totalMatchCount"));
+        table.append("--------------------------------------------------------------------------\n");
+        for (Map.Entry<String, Integer> entry : ruleCount.entrySet()) {
+            String ruleId = entry.getKey();
+            int alertCount = entry.getValue();
+            int totalMatchCount = ruleMatchTotal.getOrDefault(ruleId, 0);
+            table.append(String.format("%-34s | %-12d | %-16d%n", ruleId, alertCount, totalMatchCount));
+        }
+        return table.toString();
     }
 }
