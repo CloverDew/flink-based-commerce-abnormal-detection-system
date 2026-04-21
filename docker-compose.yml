@@ -32,9 +32,8 @@ services:
             - "8081:8081"
         command: jobmanager
         environment:
-            |
-            FLINK_PROPERTIES=
-            jobmanager.rpc.address: jobmanager
+            FLINK_PROPERTIES: |
+                jobmanager.rpc.address: jobmanager
         volumes:
             - ./:/workspace
 
@@ -44,10 +43,9 @@ services:
             - jobmanager
         command: taskmanager
         environment:
-            |
-            FLINK_PROPERTIES=
-            jobmanager.rpc.address: jobmanager
-            taskmanager.numberOfTaskSlots: 4
+            FLINK_PROPERTIES: |
+                jobmanager.rpc.address: jobmanager
+                taskmanager.numberOfTaskSlots: 4
         volumes:
             - ./:/workspace
 
