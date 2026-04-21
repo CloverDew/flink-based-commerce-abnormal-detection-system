@@ -134,7 +134,16 @@ public class DynamicRuleProcessor
 
     /** 判断事件是否匹配规则的行为类型 */
     private boolean isEventMatchRule(UserBehavior event, RiskRule rule) {
-        if (event.getActionType() == null || rule.getTargetActionType() == null) {
+        if (event.getActionType() == null) {
+            return false;
+        }
+        if (RiskRule.RuleType.ABNORMAL_LOGIN.equals(rule.getRuleType())) {
+            String action = event.getActionType();
+            return "LOGIN".equalsIgnoreCase(action) || "LOGIN_SUCCESS".equalsIgnoreCase(action)
+                    || "CHANGE_PASSWORD".equalsIgnoreCase(action) || "BIND_PHONE".equalsIgnoreCase(action)
+                    || "WITHDRAW".equalsIgnoreCase(action) || "LARGE_TRANSFER".equalsIgnoreCase(action);
+        }
+        if (rule.getTargetActionType() == null) {
             return false;
         }
         return event.getActionType().equalsIgnoreCase(rule.getTargetActionType());
