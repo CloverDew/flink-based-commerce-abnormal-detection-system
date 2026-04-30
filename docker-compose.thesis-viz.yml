@@ -1,0 +1,15 @@
+# Optional: serve Plotly HTML figures generated under .data/experiment/figures
+#
+# 1) pip install -r samples/requirements-thesis.txt
+# 2) python samples/render_thesis_figures.py --input-dir .data/experiment --out-dir .data/experiment/figures
+# 3) docker compose -f docker-compose.thesis-viz.yml up -d
+# 4) Open http://localhost:9880/
+#
+version: "3.9"
+services:
+  thesis-viz:
+    image: nginx:1.25-alpine
+    ports:
+      - "9880:80"
+    volumes:
+      - ./.data/experiment/figures:/usr/share/nginx/html:ro

@@ -1,0 +1,50 @@
+[
+  {
+    "ruleId": "thesis-abnormal-login",
+    "ruleName": "论文-异常登录后敏感操作",
+    "ruleType": "ABNORMAL_LOGIN",
+    "status": "ENABLED",
+    "targetActionType": "LOGIN",
+    "windowSizeMs": 60000,
+    "threshold": 2,
+    "groupKeyType": "BY_USER_ID",
+    "priority": 100,
+    "description": "同一用户登录后1分钟内敏感操作",
+    "version": 99,
+    "updateTimestamp": 1777552902884,
+    "valid": true,
+    "enabled": true
+  },
+  {
+    "ruleId": "thesis-order-brush",
+    "ruleName": "论文-高频下单",
+    "ruleType": "ORDER_BRUSH",
+    "status": "ENABLED",
+    "targetActionType": "ORDER",
+    "windowSizeMs": 60000,
+    "threshold": 5,
+    "groupKeyType": "BY_USER_ID",
+    "priority": 90,
+    "description": "同一用户1分钟内下单>=5",
+    "version": 99,
+    "updateTimestamp": 1777552902884,
+    "valid": true,
+    "enabled": true
+  },
+  {
+    "ruleId": "thesis-high-freq-view",
+    "ruleName": "论文-高频访问",
+    "ruleType": "HIGH_FREQ_ACCESS",
+    "status": "ENABLED",
+    "targetActionType": "VIEW",
+    "windowSizeMs": 60000,
+    "threshold": 100,
+    "groupKeyType": "BY_USER_ID",
+    "priority": 80,
+    "description": "同一用户1分钟访问>=100",
+    "version": 99,
+    "updateTimestamp": 1777552902884,
+    "valid": true,
+    "enabled": true
+  }
+]

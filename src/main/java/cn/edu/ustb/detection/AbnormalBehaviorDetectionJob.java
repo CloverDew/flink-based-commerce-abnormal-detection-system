@@ -9,10 +9,21 @@ import cn.edu.ustb.detection.serialization.AlertEventSerializationSchema;
 import cn.edu.ustb.detection.serialization.JsonDeserializationSchema;
 import cn.edu.ustb.detection.util.KeySelectorFactory;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 import org.apache.flink.api.common.eventtime.SerializableTimestampAssigner;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.utils.ParameterTool;
+import org.apache.flink.cep.CEP;
+import org.apache.flink.cep.PatternSelectFunction;
+import org.apache.flink.cep.pattern.Pattern;
+import org.apache.flink.cep.pattern.conditions.IterativeCondition;
+import org.apache.flink.cep.pattern.conditions.SimpleCondition;
 import org.apache.flink.contrib.streaming.state.EmbeddedRocksDBStateBackend;
 import org.apache.flink.connector.base.DeliveryGuarantee;
 import org.apache.flink.connector.kafka.sink.KafkaSink;
@@ -183,12 +194,109 @@ public class AbnormalBehaviorDetectionJob {
         SingleOutputStreamOperator<Tuple2<UserBehavior, RiskRule>> matchedStream = behaviorStream
                 .connect(broadcastRuleStream).process(new DynamicRuleProcessor()).name("Dynamic Rule Processor");
 
-        DataStream<AlertEvent> alertStream = matchedStream.keyBy(KeySelectorFactory.createKeySelector())
-                .process(new AbnormalPatternDetector()).name("Abnormal Pattern Detector");
+        DataStream<AlertEvent> alertStream = buildCepAlertStream(matchedStream);
 
         LOG.info("Processing pipeline built successfully");
 
         return alertStream;
+    }
+
+    /** 基于 Flink CEP 构建异常模式检测流 */
+    private static DataStream<AlertEvent> buildCepAlertStream(
+            SingleOutputStreamOperator<Tuple2<UserBehavior, RiskRule>> matchedStream) {
+        DataStream<Tuple2<UserBehavior, RiskRule>> keyed = matchedStream.keyBy(KeySelectorFactory.createKeySelector());
+
+        Pattern<Tuple2<UserBehavior, RiskRule>, ?> abnormalLoginPattern = Pattern
+                .<Tuple2<UserBehavior, RiskRule>>begin("login").where(new SimpleCondition<Tuple2<UserBehavior, RiskRule>>() {
+                    @Override
+                    public boolean filter(Tuple2<UserBehavior, RiskRule> value) {
+                        if (value == null || value.f0 == null || value.f1 == null) {
+                            return false;
+                        }
+                        if (!RiskRule.RuleType.ABNORMAL_LOGIN.equals(value.f1.getRuleType())) {
+                            return false;
+                        }
+                        String action = value.f0.getActionType();
+                        return "LOGIN".equalsIgnoreCase(action) || "LOGIN_SUCCESS".equalsIgnoreCase(action);
+                    }
+                }).followedByAny("sensitiveAction")
+                .where(new SimpleCondition<Tuple2<UserBehavior, RiskRule>>() {
+                    @Override
+                    public boolean filter(Tuple2<UserBehavior, RiskRule> value) {
+                        if (value == null || value.f0 == null || value.f1 == null) {
+                            return false;
+                        }
+                        if (!RiskRule.RuleType.ABNORMAL_LOGIN.equals(value.f1.getRuleType())) {
+                            return false;
+                        }
+                        String action = value.f0.getActionType();
+                        return "CHANGE_PASSWORD".equalsIgnoreCase(action) || "BIND_PHONE".equalsIgnoreCase(action)
+                                || "WITHDRAW".equalsIgnoreCase(action) || "LARGE_TRANSFER".equalsIgnoreCase(action);
+                    }
+                }).within(org.apache.flink.streaming.api.windowing.time.Time.minutes(10));
+
+        Pattern<Tuple2<UserBehavior, RiskRule>, ?> highFreqPattern = Pattern
+                .<Tuple2<UserBehavior, RiskRule>>begin("events")
+                .where(new IterativeCondition<Tuple2<UserBehavior, RiskRule>>() {
+                    @Override
+                    public boolean filter(Tuple2<UserBehavior, RiskRule> value, Context<Tuple2<UserBehavior, RiskRule>> ctx) {
+                        if (value == null || value.f0 == null || value.f1 == null) {
+                            return false;
+                        }
+                        RiskRule rule = value.f1;
+                        if (!RiskRule.RuleType.ORDER_BRUSH.equals(rule.getRuleType())
+                                && !RiskRule.RuleType.HIGH_FREQ_ACCESS.equals(rule.getRuleType())
+                                && !RiskRule.RuleType.CREDENTIAL_STUFFING.equals(rule.getRuleType())) {
+                            return false;
+                        }
+                        String targetAction = rule.getTargetActionType();
+                        String action = value.f0.getActionType();
+                        return targetAction != null && action != null && targetAction.equalsIgnoreCase(action);
+                    }
+                }).oneOrMore().consecutive().within(org.apache.flink.streaming.api.windowing.time.Time.minutes(10));
+
+        DataStream<AlertEvent> abnormalLoginAlerts = CEP.pattern(keyed, abnormalLoginPattern)
+                .select(new PatternSelectFunction<Tuple2<UserBehavior, RiskRule>, AlertEvent>() {
+                    @Override
+                    public AlertEvent select(Map<String, List<Tuple2<UserBehavior, RiskRule>>> pattern) {
+                        List<Tuple2<UserBehavior, RiskRule>> events = new ArrayList<>();
+                        events.addAll(pattern.getOrDefault("login", Collections.emptyList()));
+                        events.addAll(pattern.getOrDefault("sensitiveAction", Collections.emptyList()));
+                        return toAlertEvent(events);
+                    }
+                }).filter(alert -> alert != null).name("CEP Abnormal Login Pattern");
+
+        DataStream<AlertEvent> highFreqAlerts = CEP.pattern(keyed, highFreqPattern)
+                .select(new PatternSelectFunction<Tuple2<UserBehavior, RiskRule>, AlertEvent>() {
+                    @Override
+                    public AlertEvent select(Map<String, List<Tuple2<UserBehavior, RiskRule>>> pattern) {
+                        return toAlertEvent(pattern.getOrDefault("events", Collections.emptyList()));
+                    }
+                }).filter(alert -> alert != null).name("CEP Frequency Patterns");
+
+        return abnormalLoginAlerts.union(highFreqAlerts);
+    }
+
+    private static AlertEvent toAlertEvent(List<Tuple2<UserBehavior, RiskRule>> tuples) {
+        if (tuples == null || tuples.isEmpty()) {
+            return null;
+        }
+        List<Tuple2<UserBehavior, RiskRule>> sorted = tuples.stream().filter(t -> t != null && t.f0 != null && t.f1 != null)
+                .sorted(Comparator.comparingLong(t -> t.f0.getTimestamp())).collect(Collectors.toList());
+        if (sorted.isEmpty()) {
+            return null;
+        }
+        RiskRule rule = sorted.get(sorted.size() - 1).f1;
+        List<UserBehavior> events = sorted.stream().map(t -> t.f0).collect(Collectors.toList());
+        long firstTs = events.get(0).getTimestamp();
+        long lastTs = events.get(events.size() - 1).getTimestamp();
+        if (events.size() < rule.getThreshold()) {
+            return null;
+        }
+        if (lastTs - firstTs > rule.getWindowSizeMs()) {
+            return null;
+        }
+        return AlertEvent.fromRuleMatch(rule, events);
     }
 
     /** 创建用户行为事件 Kafka Source */
