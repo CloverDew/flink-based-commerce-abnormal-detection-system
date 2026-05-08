@@ -24,6 +24,8 @@ CHECKPOINT_TOLERABLE_FAILURES="${CHECKPOINT_TOLERABLE_FAILURES:-3}"
 CHECKPOINT_UNALIGNED_ENABLED="${CHECKPOINT_UNALIGNED_ENABLED:-false}"
 CHECKPOINT_EXTERNALIZED_RETAINED="${CHECKPOINT_EXTERNALIZED_RETAINED:-true}"
 CHECKPOINT_STORAGE="${CHECKPOINT_STORAGE:-}"
+DEBUG_MATCHED_PRINT="${DEBUG_MATCHED_PRINT:-false}"
+DEBUG_ALERT_PRINT="${DEBUG_ALERT_PRINT:-false}"
 
 if [[ ! -f "${JAR_PATH}" ]]; then
   echo "[submit-flink-job] jar not found, build first in runner container."
@@ -48,7 +50,9 @@ CMD=(flink run
   --checkpoint.max.concurrent "${CHECKPOINT_MAX_CONCURRENT}"
   --checkpoint.tolerable.failures "${CHECKPOINT_TOLERABLE_FAILURES}"
   --checkpoint.unaligned.enabled "${CHECKPOINT_UNALIGNED_ENABLED}"
-  --checkpoint.externalized.retained "${CHECKPOINT_EXTERNALIZED_RETAINED}")
+  --checkpoint.externalized.retained "${CHECKPOINT_EXTERNALIZED_RETAINED}"
+  --debug.matched.print "${DEBUG_MATCHED_PRINT}"
+  --debug.alert.print "${DEBUG_ALERT_PRINT}")
 
 if [[ -n "${CHECKPOINT_STORAGE}" ]]; then
   CMD+=(--checkpoint.storage "${CHECKPOINT_STORAGE}")

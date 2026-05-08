@@ -62,13 +62,16 @@ public class AbnormalBehaviorDetectionJob {
         String alertTopic = params.get("kafka.alert.topic", DEFAULT_ALERT_TOPIC);
         String groupId = params.get("kafka.group.id", DEFAULT_GROUP_ID);
         boolean enableKafkaSink = params.getBoolean("kafka.sink.enabled", false);
+        boolean debugPrintMatched = params.getBoolean("debug.matched.print", false);
+        boolean debugPrintAlerts = params.getBoolean("debug.alert.print", false);
 
         LOG.info("Configuration - bootstrapServers: {}, behaviorTopic: {}, ruleTopic: {}, alertTopic: {}, groupId: {}",
                 bootstrapServers, behaviorTopic, ruleTopic, alertTopic, groupId);
 
         StreamExecutionEnvironment env = createExecutionEnvironment(params);
 
-        DataStream<AlertEvent> alertStream = buildPipeline(env, bootstrapServers, behaviorTopic, ruleTopic, groupId);
+        DataStream<AlertEvent> alertStream = buildPipeline(env, bootstrapServers, behaviorTopic, ruleTopic, groupId,
+                debugPrintMatched, debugPrintAlerts);
 
         if (enableKafkaSink) {
             KafkaSink<AlertEvent> kafkaSink = createKafkaSink(bootstrapServers, alertTopic);
@@ -140,7 +143,8 @@ public class AbnormalBehaviorDetectionJob {
 
     /** 构建处理拓扑 */
     public static DataStream<AlertEvent> buildPipeline(StreamExecutionEnvironment env, String bootstrapServers,
-            String behaviorTopic, String ruleTopic, String groupId) {
+            String behaviorTopic, String ruleTopic, String groupId, boolean debugPrintMatched,
+            boolean debugPrintAlerts) {
 
         KafkaSource<UserBehavior> behaviorSource = createBehaviorSource(bootstrapServers, behaviorTopic, groupId);
 
@@ -186,6 +190,23 @@ public class AbnormalBehaviorDetectionJob {
         // Paper-aligned: use CEP/NFA detector module (with pattern factory).
         DataStream<AlertEvent> alertStream = AbnormalPatternDetector.buildAlertStream(matchedStream,
                 KeySelectorFactory.createKeySelector());
+
+        if (debugPrintMatched) {
+            matchedStream.map(v -> {
+                if (v == null || v.f0 == null || v.f1 == null) {
+                    return "MATCHED<null>";
+                }
+                return "MATCHED ruleType=" + v.f1.getRuleType() + " ruleId=" + v.f1.getRuleId() + " action="
+                        + v.f0.getActionType() + " userId=" + v.f0.getUserId() + " ts=" + v.f0.getTimestamp();
+            }).name("DEBUG Matched Print").print("DEBUG");
+            LOG.warn("DEBUG enabled: printing matchedStream to logs");
+        }
+        if (debugPrintAlerts) {
+            alertStream.map(a -> a == null ? "ALERT<null>" : "ALERT ruleType=" + a.getRuleType() + " ruleId="
+                    + a.getRuleId() + " userId=" + a.getUserId() + " matchCount=" + a.getMatchCount() + " ts="
+                    + a.getAlertTimestamp()).name("DEBUG Alert Print").print("ALERT");
+            LOG.warn("DEBUG enabled: printing alertStream to logs");
+        }
 
         LOG.info("Processing pipeline built successfully");
 

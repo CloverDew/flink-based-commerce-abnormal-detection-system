@@ -66,7 +66,7 @@ public class KafkaE2ETestcontainersTest {
         env.setParallelism(1);
 
         DataStream<AlertEvent> alertStream = AbnormalBehaviorDetectionJob.buildPipeline(env, bootstrap, BEHAVIOR_TOPIC,
-                RULE_TOPIC, "tc-group");
+                RULE_TOPIC, "tc-group", false, false);
         alertStream.sinkTo(buildAlertKafkaSink(bootstrap, ALERT_TOPIC)).name("tc-alert-kafka-sink");
 
         JobClient jobClient = env.executeAsync("tc-e2e-kafka-alert-flow");

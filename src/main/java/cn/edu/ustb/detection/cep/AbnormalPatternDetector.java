@@ -4,21 +4,22 @@ import cn.edu.ustb.detection.model.AlertEvent;
 import cn.edu.ustb.detection.model.RiskRule;
 import cn.edu.ustb.detection.model.UserBehavior;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
+import java.util.LinkedList;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Collectors;
 import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.cep.CEP;
-import org.apache.flink.cep.PatternSelectFunction;
-import org.apache.flink.cep.pattern.Pattern;
-import org.apache.flink.cep.pattern.conditions.SimpleCondition;
+import org.apache.flink.api.common.state.ListState;
+import org.apache.flink.api.common.state.ListStateDescriptor;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
+import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.KeyedStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
-import org.apache.flink.streaming.api.windowing.time.Time;
+import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
+import org.apache.flink.util.Collector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,118 +42,162 @@ public class AbnormalPatternDetector {
 
         KeyedStream<Tuple2<UserBehavior, RiskRule>, String> keyed = matchedStream.keyBy(keySelector);
 
-        Pattern<Tuple2<UserBehavior, RiskRule>, ?> credentialStuffing = Pattern
-                .<Tuple2<UserBehavior, RiskRule>>begin("fail")
-                .where(matchRuleTypeAction(RiskRule.RuleType.CREDENTIAL_STUFFING, "LOGIN_FAIL"))
-                .oneOrMore()
-                .consecutive()
-                .followedBy("success")
-                .where(new SimpleCondition<Tuple2<UserBehavior, RiskRule>>() {
-                    @Override
-                    public boolean filter(Tuple2<UserBehavior, RiskRule> v) {
-                        return v != null && v.f0 != null && v.f1 != null
-                                && RiskRule.RuleType.CREDENTIAL_STUFFING.equals(v.f1.getRuleType())
-                                && CepPatternFactory.isLoginSuccess(v.f0.getActionType());
-                    }
-                })
-                .within(Time.hours(1));
+        // Use keyed state detectors for paper experiments so that window/threshold can follow dynamic rules.
+        // (CEP patterns with timesOrMore() can postpone emits until window expiry; this makes experiments "no alerts".)
 
-        Pattern<Tuple2<UserBehavior, RiskRule>, ?> abnormalLogin = Pattern
-                .<Tuple2<UserBehavior, RiskRule>>begin("login")
-                .where(new SimpleCondition<Tuple2<UserBehavior, RiskRule>>() {
-                    @Override
-                    public boolean filter(Tuple2<UserBehavior, RiskRule> v) {
-                        return v != null && v.f0 != null && v.f1 != null
-                                && RiskRule.RuleType.ABNORMAL_LOGIN.equals(v.f1.getRuleType())
-                                && CepPatternFactory.isLoginSuccess(v.f0.getActionType());
-                    }
-                })
-                .followedBy("sensitiveAction")
-                .where(new SimpleCondition<Tuple2<UserBehavior, RiskRule>>() {
-                    @Override
-                    public boolean filter(Tuple2<UserBehavior, RiskRule> v) {
-                        return v != null && v.f0 != null && v.f1 != null
-                                && RiskRule.RuleType.ABNORMAL_LOGIN.equals(v.f1.getRuleType())
-                                && CepPatternFactory.isSensitiveAction(v.f0.getActionType());
-                    }
-                })
-                .within(Time.hours(1));
+        DataStream<AlertEvent> abAlerts = keyed.process(new AbnormalLoginProcess()).name("Stateful Abnormal Login");
+        DataStream<AlertEvent> obAlerts = keyed.process(new CountWithinWindowProcess(RiskRule.RuleType.ORDER_BRUSH))
+                .name("Stateful Order Brush");
+        DataStream<AlertEvent> hfAlerts = keyed.process(new CountWithinWindowProcess(RiskRule.RuleType.HIGH_FREQ_ACCESS))
+                .name("Stateful High Frequency Access");
 
-        // Paper/thesis baseline patterns:
-        // - ORDER_BRUSH: 1 user places >=5 orders within window
-        // - HIGH_FREQ_ACCESS: 1 user views >=100 times within window
-        Pattern<Tuple2<UserBehavior, RiskRule>, ?> orderBrush = Pattern
-                .<Tuple2<UserBehavior, RiskRule>>begin("orders")
-                .where(matchRuleTypeAction(RiskRule.RuleType.ORDER_BRUSH, "ORDER"))
-                .timesOrMore(5)
-                .greedy()
-                .within(Time.hours(1));
+        // Keep credential stuffing detector in CEP module (not used by thesis experiments but retained).
+        DataStream<AlertEvent> csAlerts = keyed.process(new CredentialStuffingProcess()).name("Stateful Credential Stuffing");
 
-        Pattern<Tuple2<UserBehavior, RiskRule>, ?> highFreqAccess = Pattern
-                .<Tuple2<UserBehavior, RiskRule>>begin("views")
-                .where(matchRuleTypeAction(RiskRule.RuleType.HIGH_FREQ_ACCESS, "VIEW"))
-                .timesOrMore(100)
-                .greedy()
-                .within(Time.hours(1));
-
-        DataStream<AlertEvent> csAlerts = CEP.pattern(keyed, credentialStuffing)
-                .select(new PatternSelectFunction<Tuple2<UserBehavior, RiskRule>, AlertEvent>() {
-                    @Override
-                    public AlertEvent select(Map<String, List<Tuple2<UserBehavior, RiskRule>>> pattern) {
-                        List<Tuple2<UserBehavior, RiskRule>> all = new ArrayList<>();
-                        all.addAll(pattern.getOrDefault("fail", Collections.emptyList()));
-                        all.addAll(pattern.getOrDefault("success", Collections.emptyList()));
-                        return toAlertEvent(all);
-                    }
-                })
-                .filter(a -> a != null)
-                .name("CEP Credential Stuffing");
-
-        DataStream<AlertEvent> abAlerts = CEP.pattern(keyed, abnormalLogin)
-                .select(new PatternSelectFunction<Tuple2<UserBehavior, RiskRule>, AlertEvent>() {
-                    @Override
-                    public AlertEvent select(Map<String, List<Tuple2<UserBehavior, RiskRule>>> pattern) {
-                        List<Tuple2<UserBehavior, RiskRule>> all = new ArrayList<>();
-                        all.addAll(pattern.getOrDefault("login", Collections.emptyList()));
-                        all.addAll(pattern.getOrDefault("sensitiveAction", Collections.emptyList()));
-                        return toAlertEvent(all);
-                    }
-                })
-                .filter(a -> a != null)
-                .name("CEP Abnormal Login");
-
-        DataStream<AlertEvent> obAlerts = CEP.pattern(keyed, orderBrush)
-                .select(new PatternSelectFunction<Tuple2<UserBehavior, RiskRule>, AlertEvent>() {
-                    @Override
-                    public AlertEvent select(Map<String, List<Tuple2<UserBehavior, RiskRule>>> pattern) {
-                        return toAlertEvent(pattern.getOrDefault("orders", Collections.emptyList()));
-                    }
-                })
-                .filter(a -> a != null)
-                .name("CEP Order Brush");
-
-        DataStream<AlertEvent> hfAlerts = CEP.pattern(keyed, highFreqAccess)
-                .select(new PatternSelectFunction<Tuple2<UserBehavior, RiskRule>, AlertEvent>() {
-                    @Override
-                    public AlertEvent select(Map<String, List<Tuple2<UserBehavior, RiskRule>>> pattern) {
-                        return toAlertEvent(pattern.getOrDefault("views", Collections.emptyList()));
-                    }
-                })
-                .filter(a -> a != null)
-                .name("CEP High Frequency Access");
-
-        LOG.info("CEP detector wired: credentialStuffing + abnormalLogin + orderBrush + highFreqAccess");
+        LOG.info("Stateful detector wired: credentialStuffing + abnormalLogin + orderBrush + highFreqAccess");
         return csAlerts.union(abAlerts).union(obAlerts).union(hfAlerts);
     }
 
-    private static SimpleCondition<Tuple2<UserBehavior, RiskRule>> matchRuleTypeAction(RiskRule.RuleType type, String action) {
-        return new SimpleCondition<Tuple2<UserBehavior, RiskRule>>() {
-            @Override
-            public boolean filter(Tuple2<UserBehavior, RiskRule> v) {
-                return v != null && v.f0 != null && v.f1 != null && type.equals(v.f1.getRuleType())
-                        && action != null && action.equalsIgnoreCase(v.f0.getActionType());
+    private static class CountWithinWindowProcess extends KeyedProcessFunction<String, Tuple2<UserBehavior, RiskRule>, AlertEvent> {
+        private final RiskRule.RuleType type;
+        private transient ListState<UserBehavior> eventsState;
+        private transient ValueState<Long> lastEmittedAt;
+
+        private CountWithinWindowProcess(RiskRule.RuleType type) {
+            this.type = type;
+        }
+
+        @Override
+        public void open(Configuration parameters) {
+            eventsState = getRuntimeContext().getListState(new ListStateDescriptor<>("events", UserBehavior.class));
+            lastEmittedAt = getRuntimeContext().getState(new ValueStateDescriptor<>("lastEmittedAt", Long.class));
+        }
+
+        @Override
+        public void processElement(Tuple2<UserBehavior, RiskRule> v, Context ctx, Collector<AlertEvent> out)
+                throws Exception {
+            if (v == null || v.f0 == null || v.f1 == null) {
+                return;
             }
-        };
+            RiskRule rule = v.f1;
+            UserBehavior e = v.f0;
+            if (!type.equals(rule.getRuleType())) {
+                return;
+            }
+            long ts = e.getTimestamp();
+            long window = Math.max(1L, rule.getWindowSizeMs());
+            int threshold = Math.max(1, rule.getThreshold());
+
+            LinkedList<UserBehavior> buf = new LinkedList<>();
+            for (UserBehavior old : eventsState.get()) {
+                if (old != null && (ts - old.getTimestamp()) <= window) {
+                    buf.add(old);
+                }
+            }
+            buf.add(e);
+            eventsState.update(buf);
+
+            // Emit once per key per window to avoid huge duplicates.
+            Long last = lastEmittedAt.value();
+            boolean recentlyEmitted = last != null && (ts - last) <= window;
+            if (!recentlyEmitted && buf.size() >= threshold) {
+                AlertEvent alert = AlertEvent.fromRuleMatch(rule, new ArrayList<>(buf));
+                out.collect(alert);
+                lastEmittedAt.update(ts);
+                // Keep buffer (allows downstream latency metrics); but cap memory by clearing after emit.
+                eventsState.clear();
+            }
+        }
+    }
+
+    private static class AbnormalLoginProcess extends KeyedProcessFunction<String, Tuple2<UserBehavior, RiskRule>, AlertEvent> {
+        private transient ValueState<UserBehavior> lastLogin;
+
+        @Override
+        public void open(Configuration parameters) {
+            lastLogin = getRuntimeContext().getState(new ValueStateDescriptor<>("lastLogin", UserBehavior.class));
+        }
+
+        @Override
+        public void processElement(Tuple2<UserBehavior, RiskRule> v, Context ctx, Collector<AlertEvent> out)
+                throws Exception {
+            if (v == null || v.f0 == null || v.f1 == null) {
+                return;
+            }
+            RiskRule rule = v.f1;
+            UserBehavior e = v.f0;
+            if (!RiskRule.RuleType.ABNORMAL_LOGIN.equals(rule.getRuleType())) {
+                return;
+            }
+            String action = e.getActionType();
+            if (CepPatternFactory.isLoginSuccess(action)) {
+                lastLogin.update(e);
+                return;
+            }
+            if (!CepPatternFactory.isSensitiveAction(action)) {
+                return;
+            }
+            UserBehavior login = lastLogin.value();
+            if (login == null) {
+                return;
+            }
+            long dt = e.getTimestamp() - login.getTimestamp();
+            if (dt < 0 || dt > rule.getWindowSizeMs()) {
+                return;
+            }
+            List<UserBehavior> events = new ArrayList<>();
+            events.add(login);
+            events.add(e);
+            out.collect(AlertEvent.fromRuleMatch(rule, events));
+            lastLogin.clear();
+        }
+    }
+
+    private static class CredentialStuffingProcess extends KeyedProcessFunction<String, Tuple2<UserBehavior, RiskRule>, AlertEvent> {
+        private transient ListState<UserBehavior> fails;
+
+        @Override
+        public void open(Configuration parameters) {
+            fails = getRuntimeContext().getListState(new ListStateDescriptor<>("fails", UserBehavior.class));
+        }
+
+        @Override
+        public void processElement(Tuple2<UserBehavior, RiskRule> v, Context ctx, Collector<AlertEvent> out)
+                throws Exception {
+            if (v == null || v.f0 == null || v.f1 == null) {
+                return;
+            }
+            RiskRule rule = v.f1;
+            UserBehavior e = v.f0;
+            if (!RiskRule.RuleType.CREDENTIAL_STUFFING.equals(rule.getRuleType())) {
+                return;
+            }
+            String action = e.getActionType();
+            if (CepPatternFactory.isLoginFail(action)) {
+                LinkedList<UserBehavior> buf = new LinkedList<>();
+                for (UserBehavior old : fails.get()) {
+                    if (old != null) {
+                        buf.add(old);
+                    }
+                }
+                buf.add(e);
+                fails.update(buf);
+                return;
+            }
+            if (CepPatternFactory.isLoginSuccess(action)) {
+                List<UserBehavior> buf = new ArrayList<>();
+                for (UserBehavior old : fails.get()) {
+                    if (old != null) {
+                        buf.add(old);
+                    }
+                }
+                if (buf.size() >= rule.getThreshold()) {
+                    buf.add(e);
+                    out.collect(AlertEvent.fromRuleMatch(rule, buf));
+                }
+                fails.clear();
+            }
+        }
     }
 
     private static AlertEvent toAlertEvent(List<Tuple2<UserBehavior, RiskRule>> tuples) {

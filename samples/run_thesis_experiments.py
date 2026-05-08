@@ -26,6 +26,8 @@ def run(cmd: str, timeout: int = 1200) -> str:
         cwd=ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="ignore",
         timeout=timeout,
     )
     if p.returncode != 0:
@@ -40,6 +42,8 @@ def run_argv(argv: list[str], timeout: int = 1200) -> str:
         cwd=ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="ignore",
         timeout=timeout,
     )
     if p.returncode != 0:
@@ -55,6 +59,8 @@ def run_argv_input(argv: list[str], input_text: str, timeout: int = 1200) -> str
         input=input_text,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="ignore",
         timeout=timeout,
     )
     if p.returncode != 0:
@@ -93,7 +99,10 @@ def restart_job(parallelism: int, backend: str):
     if jid:
         run(f"docker exec flink-based-commerce-abnormal-detection-system-jobmanager-1 flink cancel -m jobmanager:8081 {jid}")
     run('docker compose run --rm --entrypoint /bin/bash jobmanager -lc "/workspace/docker/scripts/submit-flink-job.sh"')
-    time.sleep(6)
+    # The behavior source starts from "latest" offsets on consumer assignment.
+    # Wait long enough for the job to reach RUNNING and consumers to subscribe,
+    # otherwise events produced immediately may be skipped.
+    time.sleep(25)
 
 
 def generate_rules_and_events(window_ms: int, event_count: int):
@@ -322,6 +331,8 @@ def capture_alerts(tag: str):
         cwd=ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="ignore",
         timeout=180,
     )
     text = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
