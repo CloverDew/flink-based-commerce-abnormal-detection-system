@@ -68,6 +68,9 @@ def restart_job(parallelism: int, backend: str):
 
 
 def generate_rules_and_events(window_ms: int, event_count: int):
+    # IMPORTANT: Flink side keeps the latest rule version in broadcast state.
+    # If we publish a lower/same version, it will be ignored and experiments produce 0 alerts.
+    ver = int(time.time() * 1000)
     rules = [
         {
             "ruleId": "thesis-abnormal-login",
@@ -79,7 +82,7 @@ def generate_rules_and_events(window_ms: int, event_count: int):
             "threshold": 2,
             "groupKeyType": "BY_USER_ID",
             "priority": 100,
-            "version": 100 + window_ms // 1000,
+            "version": ver,
             "updateTimestamp": int(time.time() * 1000),
             "valid": True,
             "enabled": True,
@@ -94,7 +97,7 @@ def generate_rules_and_events(window_ms: int, event_count: int):
             "threshold": 5,
             "groupKeyType": "BY_USER_ID",
             "priority": 90,
-            "version": 100 + window_ms // 1000,
+            "version": ver,
             "updateTimestamp": int(time.time() * 1000),
             "valid": True,
             "enabled": True,
@@ -109,7 +112,7 @@ def generate_rules_and_events(window_ms: int, event_count: int):
             "threshold": 100,
             "groupKeyType": "BY_USER_ID",
             "priority": 80,
-            "version": 100 + window_ms // 1000,
+            "version": ver,
             "updateTimestamp": int(time.time() * 1000),
             "valid": True,
             "enabled": True,
@@ -220,16 +223,35 @@ def publish_events_and_measure() -> float:
 
 def capture_alerts(tag: str):
     out_file = EXP_DIR / f"alerts-{tag}.jsonl"
-    run(
-        f"docker exec flink-based-commerce-abnormal-detection-system-kafka-1 kafka-console-consumer --bootstrap-server kafka:9092 "
-        f"--topic {ALERT_TOPIC} --from-beginning --timeout-ms 25000 > {out_file.as_posix()}",
-        timeout=120,
+    group_id = f"exp-capture-{tag}-{int(time.time() * 1000)}"
+    # Avoid shell redirection ("> file") which is fragile across Windows + docker exec.
+    p = subprocess.run(
+        [
+            "docker",
+            "exec",
+            "flink-based-commerce-abnormal-detection-system-kafka-1",
+            "kafka-console-consumer",
+            "--bootstrap-server",
+            "kafka:9092",
+            "--topic",
+            ALERT_TOPIC,
+            "--from-beginning",
+            "--group",
+            group_id,
+            "--consumer-property",
+            "auto.offset.reset=earliest",
+            "--timeout-ms",
+            "25000",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=180,
     )
+    text = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
+    out_file.write_text(text, encoding="utf-8", newline="\n")
     rows = []
-    try:
-        text = out_file.read_text(encoding="utf-16", errors="ignore")
-    except Exception:
-        text = out_file.read_text(encoding="utf-8", errors="ignore")
+    text = out_file.read_text(encoding="utf-8", errors="ignore")
     for line in text.splitlines():
         line = line.strip()
         if line.startswith("{"):

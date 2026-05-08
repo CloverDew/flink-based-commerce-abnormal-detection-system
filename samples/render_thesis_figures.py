@@ -178,21 +178,144 @@ def main():
 <head>
   <meta charset="utf-8"/>
   <title>论文实验图表</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; color: #0f172a; }
-    a { color: #2563eb; }
-    li { margin: 0.5rem 0; }
+    :root {
+      --bg: #0b1220;
+      --panel: rgba(255,255,255,0.06);
+      --panel2: rgba(255,255,255,0.08);
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --link: #60a5fa;
+      --ring: rgba(96,165,250,0.35);
+      --shadow: 0 10px 30px rgba(0,0,0,0.35);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      color: var(--text);
+      background:
+        radial-gradient(1200px 500px at 15% -10%, rgba(96,165,250,0.22), transparent 60%),
+        radial-gradient(900px 450px at 90% 0%, rgba(249,115,22,0.18), transparent 55%),
+        radial-gradient(1100px 520px at 40% 110%, rgba(34,197,94,0.12), transparent 60%),
+        var(--bg);
+    }
+    a { color: var(--link); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .container { max-width: 1080px; margin: 0 auto; padding: 28px 18px 44px; }
+    header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+    h1 { font-size: 22px; margin: 0; letter-spacing: 0.2px; }
+    .subtitle { color: var(--muted); margin-top: 6px; font-size: 13px; line-height: 1.45; }
+    .chip {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 8px 10px; border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 999px; background: rgba(255,255,255,0.05);
+      color: var(--muted); font-size: 12px; white-space: nowrap;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 14px;
+      margin-top: 16px;
+    }
+    .card {
+      grid-column: span 6;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: linear-gradient(180deg, var(--panel2), var(--panel));
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .card h2 { font-size: 15px; margin: 0; }
+    .card .meta { color: var(--muted); font-size: 12px; margin-top: 6px; line-height: 1.45; }
+    .card .top { padding: 14px 14px 10px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 8px 10px; border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(15,23,42,0.15);
+      color: var(--text);
+    }
+    .btn:hover { border-color: rgba(96,165,250,0.6); box-shadow: 0 0 0 3px var(--ring); text-decoration: none; }
+    .preview {
+      border-top: 1px solid rgba(255,255,255,0.12);
+      background: rgba(2,6,23,0.35);
+      height: 360px;
+    }
+    iframe { width: 100%; height: 100%; border: 0; }
+    .footer { margin-top: 18px; color: var(--muted); font-size: 12px; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    @media (max-width: 960px) {
+      .card { grid-column: span 12; }
+      .preview { height: 420px; }
+    }
   </style>
 </head>
 <body>
-  <h1>论文实验图表 (Plotly)</h1>
-  <p>由 <code>samples/render_thesis_figures.py</code> 生成；可用 Docker nginx 挂载本目录浏览。</p>
-  <ul>
-    <li><a href="parallelism_vs_perf.html">并行度 / 吞吐与延迟</a></li>
-    <li><a href="scalability_throughput.html">规模与吞吐</a></li>
-    <li><a href="window_vs_latency.html">时间窗口与延迟</a></li>
-    <li><a href="backend_resource.html">状态后端资源</a></li>
-  </ul>
+  <div class="container">
+    <header>
+      <div>
+        <h1>论文实验图表</h1>
+        <div class="subtitle">
+          由 <code>samples/render_thesis_figures.py</code> 从 <code>.data/experiment/*.csv</code> 生成。
+          点击「打开交互图」可在新标签页查看；下方为内嵌预览。
+        </div>
+      </div>
+      <div class="chip">Plotly · HTML</div>
+    </header>
+
+    <div class="grid">
+      <section class="card">
+        <div class="top">
+          <h2>并行度 / 吞吐与延迟</h2>
+          <div class="meta">展示并行度变化下的吞吐（events/s）与平均告警延迟（ms）。</div>
+          <div class="actions">
+            <a class="btn" href="parallelism_vs_perf.html" target="_blank" rel="noreferrer">打开交互图</a>
+          </div>
+        </div>
+        <div class="preview"><iframe loading="lazy" src="parallelism_vs_perf.html"></iframe></div>
+      </section>
+
+      <section class="card">
+        <div class="top">
+          <h2>数据规模与吞吐</h2>
+          <div class="meta">展示事件规模（条）增长时的吞吐变化趋势。</div>
+          <div class="actions">
+            <a class="btn" href="scalability_throughput.html" target="_blank" rel="noreferrer">打开交互图</a>
+          </div>
+        </div>
+        <div class="preview"><iframe loading="lazy" src="scalability_throughput.html"></iframe></div>
+      </section>
+
+      <section class="card">
+        <div class="top">
+          <h2>时间窗口与平均检测延迟</h2>
+          <div class="meta">展示规则窗口（秒）变化对平均告警延迟（ms）的影响。</div>
+          <div class="actions">
+            <a class="btn" href="window_vs_latency.html" target="_blank" rel="noreferrer">打开交互图</a>
+          </div>
+        </div>
+        <div class="preview"><iframe loading="lazy" src="window_vs_latency.html"></iframe></div>
+      </section>
+
+      <section class="card">
+        <div class="top">
+          <h2>状态后端资源占用</h2>
+          <div class="meta">对比 HashMap / RocksDB 状态后端下 TaskManager CPU 与内存采样均值。</div>
+          <div class="actions">
+            <a class="btn" href="backend_resource.html" target="_blank" rel="noreferrer">打开交互图</a>
+          </div>
+        </div>
+        <div class="preview"><iframe loading="lazy" src="backend_resource.html"></iframe></div>
+      </section>
+    </div>
+
+    <div class="footer">
+      提示：如果用 nginx 挂载 <code>.data/experiment/figures</code>，本页可直接作为入口页。
+    </div>
+  </div>
 </body>
 </html>""",
         encoding="utf-8",
