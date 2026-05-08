@@ -11,7 +11,7 @@
     "priority": 100,
     "description": "同一用户登录后1分钟内敏感操作",
     "version": 99,
-    "updateTimestamp": 1778227931808,
+    "updateTimestamp": 1778230757716,
     "valid": true,
     "enabled": true
   },
@@ -27,7 +27,7 @@
     "priority": 90,
     "description": "同一用户1分钟内下单>=5",
     "version": 99,
-    "updateTimestamp": 1778227931808,
+    "updateTimestamp": 1778230757716,
     "valid": true,
     "enabled": true
   },
@@ -43,7 +43,7 @@
     "priority": 80,
     "description": "同一用户1分钟访问>=100",
     "version": 99,
-    "updateTimestamp": 1778227931808,
+    "updateTimestamp": 1778230757716,
     "valid": true,
     "enabled": true
   }

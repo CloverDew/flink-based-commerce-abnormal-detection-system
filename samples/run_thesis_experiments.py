@@ -33,6 +33,35 @@ def run(cmd: str, timeout: int = 1200) -> str:
     return p.stdout + p.stderr
 
 
+def run_argv(argv: list[str], timeout: int = 1200) -> str:
+    p = subprocess.run(
+        argv,
+        shell=False,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if p.returncode != 0:
+        raise RuntimeError(f"cmd failed: {' '.join(argv)}\nstdout={p.stdout}\nstderr={p.stderr}")
+    return p.stdout + p.stderr
+
+
+def run_argv_input(argv: list[str], input_text: str, timeout: int = 1200) -> str:
+    p = subprocess.run(
+        argv,
+        shell=False,
+        cwd=ROOT,
+        input=input_text,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if p.returncode != 0:
+        raise RuntimeError(f"cmd failed: {' '.join(argv)}\nstdout={p.stdout}\nstderr={p.stderr}")
+    return p.stdout + p.stderr
+
+
 def update_flink_conf(parallelism: int, backend: str):
     conf = ROOT / "docker" / "conf" / "flink-job.conf"
     lines = conf.read_text(encoding="utf-8").splitlines()
@@ -174,10 +203,28 @@ def generate_rules_and_events(window_ms: int, event_count: int):
 
 
 def publish_rules():
-    run(
-        'mvn "exec:java" "-Dexec.mainClass=cn.edu.ustb.detection.tools.JsonFileKafkaPublisher" '
-        '"-Dexec.args=--input .data/experiment/thesis-risk-rules.json --kafka-bootstrap localhost:9092 --kafka-topic risk-rules --key-field ruleId"',
-        timeout=900,
+    # Avoid Maven during experiments (network dependency downloads are flaky).
+    # Use Kafka console producer with key support.
+    rules = json.loads((EXP_DIR / "thesis-risk-rules.json").read_text(encoding="utf-8"))
+    payload = "".join([f"{r.get('ruleId','')}|{json.dumps(r, ensure_ascii=False)}\n" for r in rules if r.get("ruleId")])
+    run_argv_input(
+        [
+            "docker",
+            "exec",
+            "-i",
+            "flink-based-commerce-abnormal-detection-system-kafka-1",
+            "kafka-console-producer",
+            "--bootstrap-server",
+            "kafka:9092",
+            "--topic",
+            "risk-rules",
+            "--property",
+            "parse.key=true",
+            "--property",
+            "key.separator=|",
+        ],
+        payload,
+        timeout=120,
     )
 
 
@@ -209,10 +256,39 @@ def publish_events_and_measure() -> float:
     t = threading.Thread(target=sample_stats, args=(stop, cpus, mems), daemon=True)
     t.start()
     start = time.time()
-    run(
-        'mvn "exec:java" "-Dexec.mainClass=cn.edu.ustb.detection.tools.JsonFileKafkaPublisher" '
-        '"-Dexec.args=--input .data/experiment/thesis-events.jsonl --kafka-bootstrap localhost:9092 --kafka-topic user-behavior --key-field userId"',
-        timeout=1800,
+    lines = (EXP_DIR / "thesis-events.jsonl").read_text(encoding="utf-8", errors="ignore").splitlines()
+    payload_parts = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        key = obj.get("userId") or obj.get("user_id") or ""
+        if not key:
+            continue
+        payload_parts.append(f"{key}|{json.dumps(obj, ensure_ascii=False)}\n")
+    payload = "".join(payload_parts)
+    run_argv_input(
+        [
+            "docker",
+            "exec",
+            "-i",
+            "flink-based-commerce-abnormal-detection-system-kafka-1",
+            "kafka-console-producer",
+            "--bootstrap-server",
+            "kafka:9092",
+            "--topic",
+            "user-behavior",
+            "--property",
+            "parse.key=true",
+            "--property",
+            "key.separator=|",
+        ],
+        payload,
+        timeout=600,
     )
     duration = time.time() - start
     time.sleep(8)
