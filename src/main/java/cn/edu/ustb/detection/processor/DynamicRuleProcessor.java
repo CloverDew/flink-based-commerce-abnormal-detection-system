@@ -143,6 +143,17 @@ public class DynamicRuleProcessor
                     || "CHANGE_PASSWORD".equalsIgnoreCase(action) || "BIND_PHONE".equalsIgnoreCase(action)
                     || "WITHDRAW".equalsIgnoreCase(action) || "LARGE_TRANSFER".equalsIgnoreCase(action);
         }
+        if (RiskRule.RuleType.CREDENTIAL_STUFFING.equals(rule.getRuleType())) {
+            // allow sequence detection: multiple fails followed by success
+            String action = event.getActionType();
+            return "LOGIN_FAIL".equalsIgnoreCase(action) || "LOGIN_SUCCESS".equalsIgnoreCase(action)
+                    || "LOGIN".equalsIgnoreCase(action);
+        }
+        if (RiskRule.RuleType.PAYMENT_FRAUD.equals(rule.getRuleType())) {
+            // allow rule to observe both normal payments and fraud-labelled payments
+            String action = event.getActionType();
+            return "PAYMENT".equalsIgnoreCase(action) || "PAYMENT_FRAUD".equalsIgnoreCase(action);
+        }
         if (rule.getTargetActionType() == null) {
             return false;
         }

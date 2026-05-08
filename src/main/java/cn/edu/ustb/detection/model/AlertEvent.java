@@ -48,6 +48,9 @@ public class AlertEvent implements Serializable {
     /** 匹配到的事件数量 */
     private int matchCount;
 
+    /** 风险评分（用于定量评估与下发决策） */
+    private double riskScore;
+
     /** 告警生成时间戳 */
     private long alertTimestamp;
 
@@ -67,6 +70,7 @@ public class AlertEvent implements Serializable {
         this.alertId = UUID.randomUUID().toString();
         this.alertTimestamp = System.currentTimeMillis();
         this.level = AlertLevel.MEDIUM;
+        this.riskScore = 0.0;
     }
 
     public static AlertEvent fromRuleMatch(RiskRule rule, List<UserBehavior> matchedEvents) {
@@ -190,6 +194,14 @@ public class AlertEvent implements Serializable {
         this.matchCount = matchCount;
     }
 
+    public double getRiskScore() {
+        return riskScore;
+    }
+
+    public void setRiskScore(double riskScore) {
+        this.riskScore = riskScore;
+    }
+
     public long getAlertTimestamp() {
         return alertTimestamp;
     }
@@ -249,8 +261,8 @@ public class AlertEvent implements Serializable {
     public String toString() {
         return "AlertEvent{" + "alertId='" + alertId + '\'' + ", ruleId='" + ruleId + '\'' + ", ruleType=" + ruleType
                 + ", level=" + level + ", userId='" + userId + '\'' + ", ip='" + ip + '\'' + ", matchCount="
-                + matchCount + ", alertTimestamp=" + FORMATTER.format(Instant.ofEpochMilli(alertTimestamp))
-                + ", message='" + message + '\'' + '}';
+                + matchCount + ", riskScore=" + riskScore + ", alertTimestamp="
+                + FORMATTER.format(Instant.ofEpochMilli(alertTimestamp)) + ", message='" + message + '\'' + '}';
     }
 
     /** 告警级别枚举 */

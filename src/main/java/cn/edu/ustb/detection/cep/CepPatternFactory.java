@@ -21,6 +21,34 @@ public class CepPatternFactory {
     private CepPatternFactory() {
     }
 
+    public static boolean isLoginFail(String actionType) {
+        return equalsIgnoreCase(actionType, "LOGIN_FAIL");
+    }
+
+    public static boolean isLoginSuccess(String actionType) {
+        return equalsIgnoreCase(actionType, "LOGIN_SUCCESS") || equalsIgnoreCase(actionType, "LOGIN");
+    }
+
+    public static boolean isSensitiveAction(String actionType) {
+        return equalsIgnoreCase(actionType, "CHANGE_PASSWORD") || equalsIgnoreCase(actionType, "BIND_PHONE")
+                || equalsIgnoreCase(actionType, "WITHDRAW") || equalsIgnoreCase(actionType, "LARGE_TRANSFER");
+    }
+
+    public static boolean isPayment(String actionType) {
+        return equalsIgnoreCase(actionType, "PAYMENT");
+    }
+
+    public static boolean isPaymentFraud(String actionType) {
+        return equalsIgnoreCase(actionType, "PAYMENT_FRAUD");
+    }
+
+    private static boolean equalsIgnoreCase(String a, String b) {
+        if (a == null || b == null) {
+            return false;
+        }
+        return a.equalsIgnoreCase(b);
+    }
+
     /** 根据规则类型创建对应的 CEP Pattern */
     public static Pattern<UserBehavior, ?> createPattern(RiskRule rule) {
         if (rule == null || !rule.isValid()) {
@@ -49,7 +77,7 @@ public class CepPatternFactory {
         return Pattern.<UserBehavior>begin("first").where(new SimpleCondition<UserBehavior>() {
             @Override
             public boolean filter(UserBehavior event) {
-                return "LOGIN_FAIL".equalsIgnoreCase(event.getActionType());
+                return event != null && isLoginFail(event.getActionType());
             }
         }).timesOrMore(rule.getThreshold()).greedy().within(Time.milliseconds(rule.getWindowSizeMs()));
     }
@@ -62,8 +90,11 @@ public class CepPatternFactory {
         return Pattern.<UserBehavior>begin("first").where(new SimpleCondition<UserBehavior>() {
             @Override
             public boolean filter(UserBehavior event) {
-                return "ORDER".equalsIgnoreCase(event.getActionType())
-                        || "PLACE_ORDER".equalsIgnoreCase(event.getActionType());
+                if (event == null) {
+                    return false;
+                }
+                String a = event.getActionType();
+                return equalsIgnoreCase(a, "ORDER") || equalsIgnoreCase(a, "PLACE_ORDER");
             }
         }).timesOrMore(rule.getThreshold()).greedy().within(Time.milliseconds(rule.getWindowSizeMs()));
     }
@@ -76,15 +107,12 @@ public class CepPatternFactory {
         return Pattern.<UserBehavior>begin("login").where(new SimpleCondition<UserBehavior>() {
             @Override
             public boolean filter(UserBehavior event) {
-                return "LOGIN".equalsIgnoreCase(event.getActionType())
-                        || "LOGIN_SUCCESS".equalsIgnoreCase(event.getActionType());
+                return event != null && isLoginSuccess(event.getActionType());
             }
         }).followedBy("sensitiveAction").where(new SimpleCondition<UserBehavior>() {
             @Override
             public boolean filter(UserBehavior event) {
-                String action = event.getActionType();
-                return "CHANGE_PASSWORD".equalsIgnoreCase(action) || "BIND_PHONE".equalsIgnoreCase(action)
-                        || "WITHDRAW".equalsIgnoreCase(action) || "LARGE_TRANSFER".equalsIgnoreCase(action);
+                return event != null && isSensitiveAction(event.getActionType());
             }
         }).within(Time.milliseconds(rule.getWindowSizeMs()));
     }
@@ -99,7 +127,7 @@ public class CepPatternFactory {
         return Pattern.<UserBehavior>begin("first").where(new SimpleCondition<UserBehavior>() {
             @Override
             public boolean filter(UserBehavior event) {
-                return targetAction.equalsIgnoreCase(event.getActionType());
+                return event != null && targetAction != null && targetAction.equalsIgnoreCase(event.getActionType());
             }
         }).timesOrMore(rule.getThreshold()).greedy().within(Time.milliseconds(rule.getWindowSizeMs()));
     }
@@ -117,7 +145,7 @@ public class CepPatternFactory {
                 if (targetAction == null || targetAction.isEmpty()) {
                     return true;
                 }
-                return targetAction.equalsIgnoreCase(event.getActionType());
+                return event != null && targetAction.equalsIgnoreCase(event.getActionType());
             }
         }).timesOrMore(rule.getThreshold()).greedy().within(Time.milliseconds(rule.getWindowSizeMs()));
     }
@@ -129,13 +157,13 @@ public class CepPatternFactory {
         return Pattern.<UserBehavior>begin("smallPayments").where(new SimpleCondition<UserBehavior>() {
             @Override
             public boolean filter(UserBehavior event) {
-                return "PAYMENT".equalsIgnoreCase(event.getActionType()) && event.getAmount() != null
+                return event != null && isPayment(event.getActionType()) && event.getAmount() != null
                         && event.getAmount() < 100.0;
             }
         }).timesOrMore(3).greedy().followedBy("largePayment").where(new SimpleCondition<UserBehavior>() {
             @Override
             public boolean filter(UserBehavior event) {
-                return "PAYMENT".equalsIgnoreCase(event.getActionType()) && event.getAmount() != null
+                return event != null && isPayment(event.getActionType()) && event.getAmount() != null
                         && event.getAmount() >= 1000.0;
             }
         }).within(Time.milliseconds(rule.getWindowSizeMs()));

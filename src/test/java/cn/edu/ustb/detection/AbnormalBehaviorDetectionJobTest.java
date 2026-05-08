@@ -229,7 +229,7 @@ public class AbnormalBehaviorDetectionJobTest {
         SingleOutputStreamOperator<Tuple2<UserBehavior, RiskRule>> matchedStream = behaviorStream
                 .connect(broadcastRuleStream).process(new DynamicRuleProcessor());
 
-        return matchedStream.keyBy(KeySelectorFactory.createKeySelector()).process(new AbnormalPatternDetector());
+        return AbnormalPatternDetector.buildAlertStream(matchedStream, KeySelectorFactory.createKeySelector());
     }
 
     private RiskRule createCredentialStuffingRule() {

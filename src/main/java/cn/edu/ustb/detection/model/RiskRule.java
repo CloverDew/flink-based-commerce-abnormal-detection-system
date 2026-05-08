@@ -40,6 +40,22 @@ public class RiskRule implements Serializable {
     /** 规则优先级（数值越小优先级越高） */
     private int priority;
 
+    /**
+     * 严重程度权重（用于风险评分）。
+     *
+     * <p>
+     * 取值越大表示该规则命中后的风险更高。缺省为 1.0。
+     */
+    private double severityWeight;
+
+    /**
+     * 评分阈值（用于风险评分的拦截）。
+     *
+     * <p>
+     * 当计算得到的风险评分 >= 该阈值时，才输出高风险告警。缺省为 1.0。
+     */
+    private double scoreThreshold;
+
     /** 规则描述 */
     private String description;
 
@@ -53,6 +69,8 @@ public class RiskRule implements Serializable {
         this.status = RuleStatus.ENABLED;
         this.priority = 100;
         this.groupKeyType = GroupKeyType.BY_USER_ID;
+        this.severityWeight = 1.0;
+        this.scoreThreshold = 1.0;
     }
 
     public String getRuleId() {
@@ -125,6 +143,22 @@ public class RiskRule implements Serializable {
 
     public void setPriority(int priority) {
         this.priority = priority;
+    }
+
+    public double getSeverityWeight() {
+        return severityWeight;
+    }
+
+    public void setSeverityWeight(double severityWeight) {
+        this.severityWeight = severityWeight;
+    }
+
+    public double getScoreThreshold() {
+        return scoreThreshold;
+    }
+
+    public void setScoreThreshold(double scoreThreshold) {
+        this.scoreThreshold = scoreThreshold;
     }
 
     public String getDescription() {
@@ -258,6 +292,16 @@ public class RiskRule implements Serializable {
 
         public Builder priority(int priority) {
             rule.setPriority(priority);
+            return this;
+        }
+
+        public Builder severityWeight(double severityWeight) {
+            rule.setSeverityWeight(severityWeight);
+            return this;
+        }
+
+        public Builder scoreThreshold(double scoreThreshold) {
+            rule.setScoreThreshold(scoreThreshold);
             return this;
         }
 

@@ -104,9 +104,48 @@ public class KaggleRuleTemplateGenerator {
 
     private static RiskRule rule(String id, String name, RuleType type, String action, long window, int threshold,
             GroupKeyType keyType, int priority, int version, long now, String desc) {
+        double severityWeight = severityWeight(type, priority);
+        double scoreThreshold = defaultScoreThreshold(type);
         return RiskRule.builder().ruleId(id).ruleName(name).ruleType(type).status(RuleStatus.ENABLED)
                 .targetActionType(action).windowSizeMs(window).threshold(threshold).groupKeyType(keyType)
-                .priority(priority).version(version).updateTimestamp(now).description(desc).build();
+                .priority(priority).severityWeight(severityWeight).scoreThreshold(scoreThreshold).version(version)
+                .updateTimestamp(now).description(desc).build();
+    }
+
+    private static double severityWeight(RuleType type, int priority) {
+        switch (type) {
+            case PAYMENT_FRAUD :
+                return 2.5;
+            case CREDENTIAL_STUFFING :
+                return 2.0;
+            case ORDER_BRUSH :
+                return 1.8;
+            case ABNORMAL_LOGIN :
+                return 1.6;
+            case HIGH_FREQ_ACCESS :
+            case CUSTOM :
+            default :
+                break;
+        }
+        double p = priority > 0 ? priority : 100;
+        return Math.max(1.0, Math.min(2.0, 150.0 / p));
+    }
+
+    private static double defaultScoreThreshold(RuleType type) {
+        switch (type) {
+            case PAYMENT_FRAUD :
+                return 3.0;
+            case CREDENTIAL_STUFFING :
+                return 2.5;
+            case ORDER_BRUSH :
+                return 2.2;
+            case ABNORMAL_LOGIN :
+                return 2.0;
+            case HIGH_FREQ_ACCESS :
+            case CUSTOM :
+            default :
+                return 1.8;
+        }
     }
 
     private static Map<String, String> parseArgs(String[] args) {

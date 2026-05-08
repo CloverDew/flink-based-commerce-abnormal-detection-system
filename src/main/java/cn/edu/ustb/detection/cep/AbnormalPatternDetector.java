@@ -4,176 +4,195 @@ import cn.edu.ustb.detection.model.AlertEvent;
 import cn.edu.ustb.detection.model.RiskRule;
 import cn.edu.ustb.detection.model.UserBehavior;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import org.apache.flink.api.common.state.MapState;
-import org.apache.flink.api.common.state.MapStateDescriptor;
-import org.apache.flink.api.common.typeinfo.TypeHint;
-import org.apache.flink.api.common.typeinfo.TypeInformation;
+import java.util.stream.Collectors;
+import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.configuration.Configuration;
-import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
-import org.apache.flink.util.Collector;
+import org.apache.flink.cep.CEP;
+import org.apache.flink.cep.PatternSelectFunction;
+import org.apache.flink.cep.pattern.Pattern;
+import org.apache.flink.cep.pattern.conditions.SimpleCondition;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.KeyedStream;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
+import org.apache.flink.streaming.api.windowing.time.Time;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 异常行为模式检测器
+ * 异常行为模式检测器（CEP/NFA）
  *
  * <p>
- * 基于 Keyed State 实现滑动窗口内的事件计数和模式匹配。 对于每个分组键（如 userId 或 IP），维护时间窗口内的事件列表，
- * 当事件数量达到规则阈值时触发告警。
- *
- * <p>
- * 此实现使用 KeyedProcessFunction 配合定时器实现滑动窗口效果， 比传统 CEP 更灵活，支持动态规则配置。
+ * 负责将业务规则翻译为 Flink CEP 可执行的时序匹配网络（NFA），并将匹配到的事件序列转化为带上下文证据的告警事件。
  */
-public class AbnormalPatternDetector extends KeyedProcessFunction<String, Tuple2<UserBehavior, RiskRule>, AlertEvent> {
+public class AbnormalPatternDetector {
 
-    private static final long serialVersionUID = 1L;
     private static final Logger LOG = LoggerFactory.getLogger(AbnormalPatternDetector.class);
 
-    /** 存储每个规则对应的事件列表 Key: ruleId, Value: 事件列表（按时间戳排序） */
-    private transient MapState<String, List<UserBehavior>> eventsByRuleState;
-
-    /** 存储当前有效的规则配置 Key: ruleId, Value: 规则 */
-    private transient MapState<String, RiskRule> activeRulesState;
-
-    /** 防重复告警：存储最近触发告警的时间戳 Key: ruleId, Value: 最后告警时间 */
-    private transient MapState<String, Long> lastAlertTimeState;
-
-    /** 告警冷却时间（同一规则在此时间内不重复告警） */
-    private static final long ALERT_COOLDOWN_MS = 30_000L;
-
-    @Override
-    public void open(Configuration parameters) throws Exception {
-        super.open(parameters);
-
-        eventsByRuleState = getRuntimeContext().getMapState(new MapStateDescriptor<>("events-by-rule",
-                TypeInformation.of(String.class), TypeInformation.of(new TypeHint<List<UserBehavior>>() {
-                })));
-
-        activeRulesState = getRuntimeContext().getMapState(new MapStateDescriptor<>("active-rules",
-                TypeInformation.of(String.class), TypeInformation.of(RiskRule.class)));
-
-        lastAlertTimeState = getRuntimeContext().getMapState(new MapStateDescriptor<>("last-alert-time",
-                TypeInformation.of(String.class), TypeInformation.of(Long.class)));
-
-        LOG.info("AbnormalPatternDetector initialized");
+    private AbnormalPatternDetector() {
     }
 
-    @Override
-    public void processElement(Tuple2<UserBehavior, RiskRule> value,
-            KeyedProcessFunction<String, Tuple2<UserBehavior, RiskRule>, AlertEvent>.Context ctx,
-            Collector<AlertEvent> out) throws Exception {
+    public static DataStream<AlertEvent> buildAlertStream(
+            SingleOutputStreamOperator<Tuple2<UserBehavior, RiskRule>> matchedStream,
+            KeySelector<Tuple2<UserBehavior, RiskRule>, String> keySelector) {
 
-        UserBehavior event = value.f0;
-        RiskRule rule = value.f1;
+        KeyedStream<Tuple2<UserBehavior, RiskRule>, String> keyed = matchedStream.keyBy(keySelector);
 
-        if (event == null || rule == null) {
-            LOG.warn("Received null event or rule, skipping");
-            return;
-        }
+        Pattern<Tuple2<UserBehavior, RiskRule>, ?> credentialStuffing = Pattern
+                .<Tuple2<UserBehavior, RiskRule>>begin("fail")
+                .where(matchRuleTypeAction(RiskRule.RuleType.CREDENTIAL_STUFFING, "LOGIN_FAIL"))
+                .oneOrMore()
+                .consecutive()
+                .followedBy("success")
+                .where(new SimpleCondition<Tuple2<UserBehavior, RiskRule>>() {
+                    @Override
+                    public boolean filter(Tuple2<UserBehavior, RiskRule> v) {
+                        return v != null && v.f0 != null && v.f1 != null
+                                && RiskRule.RuleType.CREDENTIAL_STUFFING.equals(v.f1.getRuleType())
+                                && CepPatternFactory.isLoginSuccess(v.f0.getActionType());
+                    }
+                })
+                .within(Time.hours(1));
 
-        String ruleId = rule.getRuleId();
-        long currentTime = event.getTimestamp();
+        Pattern<Tuple2<UserBehavior, RiskRule>, ?> abnormalLogin = Pattern
+                .<Tuple2<UserBehavior, RiskRule>>begin("login")
+                .where(new SimpleCondition<Tuple2<UserBehavior, RiskRule>>() {
+                    @Override
+                    public boolean filter(Tuple2<UserBehavior, RiskRule> v) {
+                        return v != null && v.f0 != null && v.f1 != null
+                                && RiskRule.RuleType.ABNORMAL_LOGIN.equals(v.f1.getRuleType())
+                                && CepPatternFactory.isLoginSuccess(v.f0.getActionType());
+                    }
+                })
+                .followedBy("sensitiveAction")
+                .where(new SimpleCondition<Tuple2<UserBehavior, RiskRule>>() {
+                    @Override
+                    public boolean filter(Tuple2<UserBehavior, RiskRule> v) {
+                        return v != null && v.f0 != null && v.f1 != null
+                                && RiskRule.RuleType.ABNORMAL_LOGIN.equals(v.f1.getRuleType())
+                                && CepPatternFactory.isSensitiveAction(v.f0.getActionType());
+                    }
+                })
+                .within(Time.hours(1));
 
-        activeRulesState.put(ruleId, rule);
+        Pattern<Tuple2<UserBehavior, RiskRule>, ?> highFreq = Pattern
+                .<Tuple2<UserBehavior, RiskRule>>begin("events")
+                .where(new SimpleCondition<Tuple2<UserBehavior, RiskRule>>() {
+                    @Override
+                    public boolean filter(Tuple2<UserBehavior, RiskRule> v) {
+                        if (v == null || v.f0 == null || v.f1 == null) {
+                            return false;
+                        }
+                        RiskRule r = v.f1;
+                        String action = v.f0.getActionType();
+                        if (action == null) {
+                            return false;
+                        }
+                        if (RiskRule.RuleType.PAYMENT_FRAUD.equals(r.getRuleType())) {
+                            return CepPatternFactory.isPayment(action) || CepPatternFactory.isPaymentFraud(action);
+                        }
+                        if (!RiskRule.RuleType.ORDER_BRUSH.equals(r.getRuleType())
+                                && !RiskRule.RuleType.HIGH_FREQ_ACCESS.equals(r.getRuleType())
+                                && !RiskRule.RuleType.CUSTOM.equals(r.getRuleType())) {
+                            return false;
+                        }
+                        String target = r.getTargetActionType();
+                        return target != null && target.equalsIgnoreCase(action);
+                    }
+                })
+                .oneOrMore()
+                .consecutive()
+                .within(Time.hours(1));
 
-        List<UserBehavior> events = eventsByRuleState.get(ruleId);
-        if (events == null) {
-            events = new ArrayList<>();
-        }
+        DataStream<AlertEvent> csAlerts = CEP.pattern(keyed, credentialStuffing)
+                .select(new PatternSelectFunction<Tuple2<UserBehavior, RiskRule>, AlertEvent>() {
+                    @Override
+                    public AlertEvent select(Map<String, List<Tuple2<UserBehavior, RiskRule>>> pattern) {
+                        List<Tuple2<UserBehavior, RiskRule>> all = new ArrayList<>();
+                        all.addAll(pattern.getOrDefault("fail", Collections.emptyList()));
+                        all.addAll(pattern.getOrDefault("success", Collections.emptyList()));
+                        return toAlertEvent(all);
+                    }
+                })
+                .filter(a -> a != null)
+                .name("CEP Credential Stuffing");
 
-        events.add(event);
+        DataStream<AlertEvent> abAlerts = CEP.pattern(keyed, abnormalLogin)
+                .select(new PatternSelectFunction<Tuple2<UserBehavior, RiskRule>, AlertEvent>() {
+                    @Override
+                    public AlertEvent select(Map<String, List<Tuple2<UserBehavior, RiskRule>>> pattern) {
+                        List<Tuple2<UserBehavior, RiskRule>> all = new ArrayList<>();
+                        all.addAll(pattern.getOrDefault("login", Collections.emptyList()));
+                        all.addAll(pattern.getOrDefault("sensitiveAction", Collections.emptyList()));
+                        return toAlertEvent(all);
+                    }
+                })
+                .filter(a -> a != null)
+                .name("CEP Abnormal Login");
 
-        long windowStart = currentTime - rule.getWindowSizeMs();
-        events = cleanExpiredEvents(events, windowStart);
+        DataStream<AlertEvent> hfAlerts = CEP.pattern(keyed, highFreq)
+                .select(new PatternSelectFunction<Tuple2<UserBehavior, RiskRule>, AlertEvent>() {
+                    @Override
+                    public AlertEvent select(Map<String, List<Tuple2<UserBehavior, RiskRule>>> pattern) {
+                        return toAlertEvent(pattern.getOrDefault("events", Collections.emptyList()));
+                    }
+                })
+                .filter(a -> a != null)
+                .name("CEP High Frequency");
 
-        eventsByRuleState.put(ruleId, events);
-
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("Added event for rule {}: key={}, eventCount={}, windowStart={}, currentTime={}", ruleId,
-                    ctx.getCurrentKey(), events.size(), windowStart, currentTime);
-        }
-
-        if (events.size() >= rule.getThreshold()) {
-            if (shouldTriggerAlert(ruleId, currentTime)) {
-                AlertEvent alert = AlertEvent.fromRuleMatch(rule, new ArrayList<>(events));
-                out.collect(alert);
-
-                lastAlertTimeState.put(ruleId, currentTime);
-
-                LOG.info("Alert triggered: ruleId={}, ruleType={}, key={}, matchCount={}, threshold={}", ruleId,
-                        rule.getRuleType(), ctx.getCurrentKey(), events.size(), rule.getThreshold());
-
-                events.clear();
-                eventsByRuleState.put(ruleId, events);
-            } else {
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("Alert suppressed (cooldown): ruleId={}, key={}", ruleId, ctx.getCurrentKey());
-                }
-            }
-        }
-
-        scheduleCleanupTimer(ctx, currentTime, rule.getWindowSizeMs());
+        LOG.info("CEP detector wired: credentialStuffing + abnormalLogin + highFreq");
+        return csAlerts.union(abAlerts).union(hfAlerts);
     }
 
-    @Override
-    public void onTimer(long timestamp,
-            KeyedProcessFunction<String, Tuple2<UserBehavior, RiskRule>, AlertEvent>.OnTimerContext ctx,
-            Collector<AlertEvent> out) throws Exception {
-
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("Cleanup timer fired: key={}, timestamp={}", ctx.getCurrentKey(), timestamp);
-        }
-
-        for (Map.Entry<String, RiskRule> ruleEntry : activeRulesState.entries()) {
-            String ruleId = ruleEntry.getKey();
-            RiskRule rule = ruleEntry.getValue();
-
-            if (rule == null) {
-                continue;
+    private static SimpleCondition<Tuple2<UserBehavior, RiskRule>> matchRuleTypeAction(RiskRule.RuleType type, String action) {
+        return new SimpleCondition<Tuple2<UserBehavior, RiskRule>>() {
+            @Override
+            public boolean filter(Tuple2<UserBehavior, RiskRule> v) {
+                return v != null && v.f0 != null && v.f1 != null && type.equals(v.f1.getRuleType())
+                        && action != null && action.equalsIgnoreCase(v.f0.getActionType());
             }
-
-            List<UserBehavior> events = eventsByRuleState.get(ruleId);
-            if (events == null || events.isEmpty()) {
-                continue;
-            }
-
-            long windowStart = timestamp - rule.getWindowSizeMs();
-            List<UserBehavior> cleanedEvents = cleanExpiredEvents(events, windowStart);
-
-            if (cleanedEvents.size() < events.size()) {
-                eventsByRuleState.put(ruleId, cleanedEvents);
-                LOG.debug("Cleaned expired events for rule {}: before={}, after={}", ruleId, events.size(),
-                        cleanedEvents.size());
-            }
-        }
+        };
     }
 
-    /** 清理过期事件 */
-    private List<UserBehavior> cleanExpiredEvents(List<UserBehavior> events, long windowStart) {
-        List<UserBehavior> validEvents = new ArrayList<>();
-        for (UserBehavior event : events) {
-            if (event.getTimestamp() >= windowStart) {
-                validEvents.add(event);
+    private static AlertEvent toAlertEvent(List<Tuple2<UserBehavior, RiskRule>> tuples) {
+        if (tuples == null || tuples.isEmpty()) {
+            return null;
+        }
+        List<Tuple2<UserBehavior, RiskRule>> sorted = tuples.stream()
+                .filter(t -> t != null && t.f0 != null && t.f1 != null)
+                .sorted(Comparator.comparingLong(t -> t.f0.getTimestamp()))
+                .collect(Collectors.toList());
+        if (sorted.isEmpty()) {
+            return null;
+        }
+
+        RiskRule rule = sorted.get(sorted.size() - 1).f1;
+        List<UserBehavior> events = sorted.stream().map(t -> t.f0).collect(Collectors.toList());
+
+        long firstTs = events.get(0).getTimestamp();
+        long lastTs = events.get(events.size() - 1).getTimestamp();
+        if (lastTs - firstTs > rule.getWindowSizeMs()) {
+            return null;
+        }
+
+        if (RiskRule.RuleType.CREDENTIAL_STUFFING.equals(rule.getRuleType())) {
+            long failCount = events.stream().filter(e -> e != null && CepPatternFactory.isLoginFail(e.getActionType()))
+                    .count();
+            if (failCount < rule.getThreshold()) {
+                return null;
             }
+        } else if (events.size() < rule.getThreshold()) {
+            return null;
         }
-        return validEvents;
-    }
 
-    /** 判断是否应该触发告警（防重复告警） */
-    private boolean shouldTriggerAlert(String ruleId, long currentTime) throws Exception {
-        Long lastAlertTime = lastAlertTimeState.get(ruleId);
-        if (lastAlertTime == null) {
-            return true;
-        }
-        return (currentTime - lastAlertTime) >= ALERT_COOLDOWN_MS;
-    }
-
-    /** 注册清理定时器 */
-    private void scheduleCleanupTimer(Context ctx, long currentTime, long windowSize) {
-        long cleanupTime = currentTime + windowSize + 1000L;
-        ctx.timerService().registerEventTimeTimer(cleanupTime);
+        AlertEvent alert = AlertEvent.fromRuleMatch(rule, events);
+        double densityPerSec = events.size() / Math.max(1.0, rule.getWindowSizeMs() / 1000.0);
+        double score = rule.getSeverityWeight()
+                * ((double) events.size() / Math.max(1, rule.getThreshold()) + Math.min(1.5, densityPerSec / 10.0));
+        alert.setRiskScore(score);
+        return score >= rule.getScoreThreshold() ? alert : null;
     }
 }

@@ -25,6 +25,40 @@ services:
             KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
             KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
 
+    clickhouse:
+        image: clickhouse/clickhouse-server:24.3
+        depends_on:
+            - kafka
+        ports:
+            - "8123:8123"
+            - "9000:9000"
+        environment:
+            CLICKHOUSE_DB: risk
+            CLICKHOUSE_USER: default
+            CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        volumes:
+            - ./docker/clickhouse/init:/docker-entrypoint-initdb.d:ro
+
+    redis:
+        image: redis:7.2-alpine
+        ports:
+            - "6379:6379"
+
+    grafana:
+        image: grafana/grafana:10.4.3
+        depends_on:
+            - clickhouse
+        ports:
+            - "3000:3000"
+        environment:
+            GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+            GF_SECURITY_ADMIN_USER: admin
+            GF_SECURITY_ADMIN_PASSWORD: admin
+            GF_USERS_ALLOW_SIGN_UP: "false"
+        volumes:
+            - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+            - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+
     jobmanager:
         image: flink:1.17.2-scala_2.12-java11
         depends_on:

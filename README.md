@@ -27,6 +27,51 @@ Runtime Config:
 - docker/conf/flink-job.conf    (并行度、状态后端、checkpoint 参数)
 ```
 
+## 输出与反馈层（告警推送 + 实时看板 + 特征缓存）
+
+本项目支持一套“三位一体”的反馈机制：
+
+- **告警推送**：Flink 任务将 `AlertEvent` 输出到 Kafka `alerts` topic（或直接 PrintSink）。
+- **实时看板（ClickHouse + Grafana）**：ClickHouse 通过 Kafka Engine 订阅 `alerts` topic，写入明细表与聚合表；Grafana 读取 ClickHouse 展示吞吐、类型占比、Top 攻击源等面板。
+- **特征缓存（Redis）**：可选组件。提供 `AlertFeatureCacheConsumer`，从 Kafka `alerts` 消费告警，把 `AlertEvent.extra`（特征 JSON）按用户/IP 写入 Redis（带 TTL），便于业务侧快速查询最近特征快照。
+
+### 一键启动（含 ClickHouse/Grafana/Redis）
+
+```bash
+docker compose up -d zookeeper kafka clickhouse grafana redis jobmanager taskmanager
+```
+
+访问：
+
+- Flink Web UI：`http://localhost:8081`
+- Grafana：`http://localhost:3000`（默认 `admin/admin`）
+- ClickHouse HTTP：`http://localhost:8123`
+
+说明：
+
+- ClickHouse 初始化 SQL 位于 `docker/clickhouse/init/`，会自动创建 `risk.alerts`、`risk.alerts_agg_1m` 等表，并从 Kafka `alerts` topic 实时入库。
+- Grafana 会自动安装 ClickHouse 数据源插件并加载内置看板（`docker/grafana/dashboards/`）。
+
+### 启动特征缓存消费者（可选）
+
+在本机（或容器内）先构建 jar：
+
+```bash
+mvn -DskipTests package
+```
+
+然后启动 Redis 特征缓存消费者：
+
+```bash
+java -cp target/flink-based-commerce-abnormal-detection-system-1.0-SNAPSHOT.jar \
+  cn.edu.ustb.detection.tools.AlertFeatureCacheConsumer \
+  --kafka-bootstrap localhost:9092 \
+  --kafka-topic alerts \
+  --redis-host localhost \
+  --redis-port 6379 \
+  --ttl-seconds 1800
+```
+
 ## 核心功能
 
 ### 1. 数据接入与时间语义
