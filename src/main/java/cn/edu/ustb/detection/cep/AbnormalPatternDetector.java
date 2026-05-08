@@ -78,33 +78,21 @@ public class AbnormalPatternDetector {
                 })
                 .within(Time.hours(1));
 
-        Pattern<Tuple2<UserBehavior, RiskRule>, ?> highFreq = Pattern
-                .<Tuple2<UserBehavior, RiskRule>>begin("events")
-                .where(new SimpleCondition<Tuple2<UserBehavior, RiskRule>>() {
-                    @Override
-                    public boolean filter(Tuple2<UserBehavior, RiskRule> v) {
-                        if (v == null || v.f0 == null || v.f1 == null) {
-                            return false;
-                        }
-                        RiskRule r = v.f1;
-                        String action = v.f0.getActionType();
-                        if (action == null) {
-                            return false;
-                        }
-                        if (RiskRule.RuleType.PAYMENT_FRAUD.equals(r.getRuleType())) {
-                            return CepPatternFactory.isPayment(action) || CepPatternFactory.isPaymentFraud(action);
-                        }
-                        if (!RiskRule.RuleType.ORDER_BRUSH.equals(r.getRuleType())
-                                && !RiskRule.RuleType.HIGH_FREQ_ACCESS.equals(r.getRuleType())
-                                && !RiskRule.RuleType.CUSTOM.equals(r.getRuleType())) {
-                            return false;
-                        }
-                        String target = r.getTargetActionType();
-                        return target != null && target.equalsIgnoreCase(action);
-                    }
-                })
-                .oneOrMore()
-                .consecutive()
+        // Paper/thesis baseline patterns:
+        // - ORDER_BRUSH: 1 user places >=5 orders within window
+        // - HIGH_FREQ_ACCESS: 1 user views >=100 times within window
+        Pattern<Tuple2<UserBehavior, RiskRule>, ?> orderBrush = Pattern
+                .<Tuple2<UserBehavior, RiskRule>>begin("orders")
+                .where(matchRuleTypeAction(RiskRule.RuleType.ORDER_BRUSH, "ORDER"))
+                .timesOrMore(5)
+                .greedy()
+                .within(Time.hours(1));
+
+        Pattern<Tuple2<UserBehavior, RiskRule>, ?> highFreqAccess = Pattern
+                .<Tuple2<UserBehavior, RiskRule>>begin("views")
+                .where(matchRuleTypeAction(RiskRule.RuleType.HIGH_FREQ_ACCESS, "VIEW"))
+                .timesOrMore(100)
+                .greedy()
                 .within(Time.hours(1));
 
         DataStream<AlertEvent> csAlerts = CEP.pattern(keyed, credentialStuffing)
@@ -133,18 +121,28 @@ public class AbnormalPatternDetector {
                 .filter(a -> a != null)
                 .name("CEP Abnormal Login");
 
-        DataStream<AlertEvent> hfAlerts = CEP.pattern(keyed, highFreq)
+        DataStream<AlertEvent> obAlerts = CEP.pattern(keyed, orderBrush)
                 .select(new PatternSelectFunction<Tuple2<UserBehavior, RiskRule>, AlertEvent>() {
                     @Override
                     public AlertEvent select(Map<String, List<Tuple2<UserBehavior, RiskRule>>> pattern) {
-                        return toAlertEvent(pattern.getOrDefault("events", Collections.emptyList()));
+                        return toAlertEvent(pattern.getOrDefault("orders", Collections.emptyList()));
                     }
                 })
                 .filter(a -> a != null)
-                .name("CEP High Frequency");
+                .name("CEP Order Brush");
 
-        LOG.info("CEP detector wired: credentialStuffing + abnormalLogin + highFreq");
-        return csAlerts.union(abAlerts).union(hfAlerts);
+        DataStream<AlertEvent> hfAlerts = CEP.pattern(keyed, highFreqAccess)
+                .select(new PatternSelectFunction<Tuple2<UserBehavior, RiskRule>, AlertEvent>() {
+                    @Override
+                    public AlertEvent select(Map<String, List<Tuple2<UserBehavior, RiskRule>>> pattern) {
+                        return toAlertEvent(pattern.getOrDefault("views", Collections.emptyList()));
+                    }
+                })
+                .filter(a -> a != null)
+                .name("CEP High Frequency Access");
+
+        LOG.info("CEP detector wired: credentialStuffing + abnormalLogin + orderBrush + highFreqAccess");
+        return csAlerts.union(abAlerts).union(obAlerts).union(hfAlerts);
     }
 
     private static SimpleCondition<Tuple2<UserBehavior, RiskRule>> matchRuleTypeAction(RiskRule.RuleType type, String action) {
