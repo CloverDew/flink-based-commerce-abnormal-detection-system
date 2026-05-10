@@ -30,6 +30,22 @@ def to_float(row: Dict[str, Any], key: str, default: float = 0.0) -> float:
         return default
 
 
+def y_axis_range(values: List[float], *, pad_ratio: float = 0.14, floor_zero: bool = True) -> tuple[float, float]:
+    if not values:
+        return 0.0, 1.0
+    lo = min(values)
+    hi = max(values)
+    if lo == hi:
+        span = abs(hi) if hi else 1.0
+        lo, hi = lo - span * 0.5, hi + span * 0.5
+    else:
+        span = hi - lo
+        lo, hi = lo - span * pad_ratio, hi + span * pad_ratio
+    if floor_zero:
+        lo = min(0.0, lo)
+    return lo, hi
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input-dir", default=".data/experiment")
@@ -76,18 +92,11 @@ def main():
             ),
             secondary_y=True,
         )
-        fig.add_hrect(
-            y0=60_000,
-            y1=1_800_000,
-            line_width=0,
-            fillcolor="rgba(100,116,139,0.15)",
-            secondary_y=True,
-            annotation_text="典型离线/T+1 审计常见量级 (分钟级，示意参考带)",
-            annotation_position="top left",
-        )
+        lat_lo, lat_hi = y_axis_range(lat, pad_ratio=0.18, floor_zero=True)
+        thr_lo, thr_hi = y_axis_range(thr, pad_ratio=0.12, floor_zero=True)
         fig.update_xaxes(title_text="并行度", dtick=1)
-        fig.update_yaxes(title_text="吞吐 (events/s)", secondary_y=False, rangemode="tozero")
-        fig.update_yaxes(title_text="平均告警延迟 (ms)", secondary_y=True, rangemode="tozero")
+        fig.update_yaxes(title_text="吞吐 (events/s)", secondary_y=False, range=[thr_lo, thr_hi])
+        fig.update_yaxes(title_text="平均检测延迟 (ms)", secondary_y=True, range=[lat_lo, lat_hi])
         fig.update_layout(
             template=template,
             title=dict(text="并行度与吞吐 / 检测延迟", font=dict(size=20)),
@@ -116,7 +125,8 @@ def main():
             )
         )
         fig.update_xaxes(title_text="事件规模 (条)", tickformat=",")
-        fig.update_yaxes(title_text="吞吐 (events/s)", rangemode="tozero")
+        y0, y1 = y_axis_range(y, pad_ratio=0.10, floor_zero=True)
+        fig.update_yaxes(title_text="吞吐 (events/s)", range=[y0, y1])
         fig.update_layout(
             template=template,
             title=dict(text="数据规模与吞吐", font=dict(size=20)),
@@ -129,48 +139,105 @@ def main():
     w_rows = [r for r in read_csv(inp / "perf_windows.csv") if r.get("case", "").startswith("w")]
     if w_rows:
         w_rows.sort(key=lambda r: to_float(r, "window"))
-        x = [to_float(r, "window") / 1000 for r in w_rows]
+        x_sec = [to_float(r, "window") / 1000 for r in w_rows]
+        labels = [f"{int(v)}s" for v in x_sec]
         lat = [to_float(r, "avg_latency_ms") for r in w_rows]
         fig = go.Figure()
         fig.add_trace(
             go.Bar(
-                x=[f"{int(v)}s" for v in x],
+                x=labels,
                 y=lat,
+                name="平均延迟",
                 marker_color=palette["accent"],
-                text=[f"{v:.1f}" for v in lat],
+                opacity=0.78,
+                text=[f"{v:.0f}" for v in lat],
                 textposition="outside",
             )
         )
-        fig.update_xaxes(title_text="规则时间窗口")
-        fig.update_yaxes(title_text="平均告警延迟 (ms)", rangemode="tozero")
+        fig.add_trace(
+            go.Scatter(
+                x=labels,
+                y=lat,
+                name="趋势线",
+                mode="lines+markers",
+                line=dict(color=palette["primary"], width=3),
+                marker=dict(size=12, color=palette["primary"], line=dict(width=1, color="white")),
+                yaxis="y",
+            )
+        )
+        y0, y1 = y_axis_range(lat, pad_ratio=0.22, floor_zero=True)
+        fig.update_xaxes(title_text="规则时间窗口（滚动窗口长度）", categoryorder="array", categoryarray=labels)
+        fig.update_yaxes(title_text="平均检测延迟 (ms)", range=[y0, y1])
         fig.update_layout(
             template=template,
             title=dict(text="时间窗口与平均检测延迟", font=dict(size=20)),
-            height=420,
+            height=440,
             margin=dict(l=56, r=40, t=72, b=56),
-            showlegend=False,
+            legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1),
+            barmode="overlay",
         )
         save(fig, "window_vs_latency.html")
 
     b_rows = [r for r in read_csv(inp / "perf_backend.csv") if r.get("case", "").startswith("b")]
     if b_rows:
-        labels = [r.get("backend", "") for r in b_rows]
+        disp = {"hashmap": "HashMap", "rocksdb": "RocksDB"}
+        labels = [disp.get(str(r.get("backend", "")).lower(), str(r.get("backend", ""))) for r in b_rows]
         mem = [to_float(r, "mem_mb") for r in b_rows]
         cpu = [to_float(r, "cpu_pct") for r in b_rows]
-        fig = go.Figure()
-        fig.add_trace(go.Bar(name="CPU %", x=labels, y=cpu, marker_color=palette["primary"]))
-        fig.add_trace(go.Bar(name="内存 MiB", x=labels, y=mem, marker_color=palette["muted"], yaxis="y2"))
+        fig = make_subplots(
+            rows=1,
+            cols=2,
+            subplot_titles=("CPU 占用（%，采样均值）", "内存占用（MiB，采样均值）"),
+            horizontal_spacing=0.14,
+        )
+        fig.add_trace(
+            go.Bar(x=labels, y=cpu, name="CPU %", marker_color=palette["primary"], text=[f"{v:.1f}" for v in cpu], textposition="outside"),
+            row=1,
+            col=1,
+        )
+        fig.add_trace(
+            go.Bar(x=labels, y=mem, name="内存 MiB", marker_color=palette["muted"], text=[f"{v:.0f}" for v in mem], textposition="outside"),
+            row=1,
+            col=2,
+        )
+        c0, c1 = y_axis_range(cpu, pad_ratio=0.20, floor_zero=True)
+        m0, m1 = y_axis_range(mem, pad_ratio=0.14, floor_zero=False)
+        fig.update_yaxes(range=[c0, c1], row=1, col=1)
+        fig.update_yaxes(range=[m0, m1], row=1, col=2)
         fig.update_layout(
             template=template,
-            title=dict(text="状态后端：TaskManager 资源占用（采样均值）", font=dict(size=18)),
-            barmode="group",
-            height=420,
-            yaxis=dict(title="CPU %"),
-            yaxis2=dict(title="内存 MiB", overlaying="y", side="right", showgrid=False),
-            legend=dict(orientation="h", y=1.08),
-            margin=dict(l=56, r=56, t=80, b=56),
+            title=dict(text="状态后端：TaskManager 资源占用对比", font=dict(size=18)),
+            height=440,
+            showlegend=False,
+            margin=dict(l=56, r=40, t=88, b=56),
         )
         save(fig, "backend_resource.html")
+
+    acc_rows = read_csv(inp / "functional_metrics.csv")
+    if acc_rows:
+        types = [str(r.get("异常类型", "") or "").strip() for r in acc_rows]
+        prec = [to_float(r, "Precision") for r in acc_rows]
+        rec = [to_float(r, "Recall") for r in acc_rows]
+        f1 = [to_float(r, "F1") for r in acc_rows]
+        fig = go.Figure()
+        fig.add_trace(go.Bar(name="Precision", x=types, y=prec, marker_color=palette["primary"], text=[f"{v:.3f}" for v in prec], textposition="outside"))
+        fig.add_trace(go.Bar(name="Recall", x=types, y=rec, marker_color=palette["accent"], text=[f"{v:.3f}" for v in rec], textposition="outside"))
+        fig.add_trace(go.Bar(name="F1", x=types, y=f1, marker_color=palette["muted"], text=[f"{v:.3f}" for v in f1], textposition="outside"))
+        score_lo = min(prec + rec + f1)
+        score_hi = max(prec + rec + f1)
+        pad = max(0.02, (score_hi - score_lo) * 0.35)
+        fig.update_yaxes(title_text="得分", range=[max(0.0, score_lo - pad), min(1.0, score_hi + pad)], tickformat=".2f")
+        fig.update_layout(
+            template=template,
+            title=dict(text="各异常类型检测效果对比（Precision / Recall / F1）", font=dict(size=18)),
+            barmode="group",
+            bargap=0.18,
+            bargroupgap=0.08,
+            height=460,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(l=56, r=40, t=88, b=72),
+        )
+        save(fig, "detection_accuracy.html")
 
     (out / "index.html").write_text(
         """<!DOCTYPE html>
@@ -227,6 +294,7 @@ def main():
       box-shadow: var(--shadow);
       overflow: hidden;
     }
+    .card.span12 { grid-column: span 12; }
     .card h2 { font-size: 15px; margin: 0; }
     .card .meta { color: var(--muted); font-size: 12px; margin-top: 6px; line-height: 1.45; }
     .card .top { padding: 14px 14px 10px; }
@@ -309,6 +377,17 @@ def main():
           </div>
         </div>
         <div class="preview"><iframe loading="lazy" src="backend_resource.html"></iframe></div>
+      </section>
+
+      <section class="card span12">
+        <div class="top">
+          <h2>检测准确率对比</h2>
+          <div class="meta">按异常类型对比 Precision、Recall 与 F1（来源：<code>functional_metrics.csv</code>）。</div>
+          <div class="actions">
+            <a class="btn" href="detection_accuracy.html" target="_blank" rel="noreferrer">打开交互图</a>
+          </div>
+        </div>
+        <div class="preview"><iframe loading="lazy" src="detection_accuracy.html"></iframe></div>
       </section>
     </div>
 
