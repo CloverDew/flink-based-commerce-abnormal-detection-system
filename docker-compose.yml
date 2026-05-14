@@ -60,7 +60,7 @@ services:
             - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
 
     jobmanager:
-        image: flink:1.17.2-scala_2.12-java11
+        image: ${FLINK_APP_IMAGE:-cloverdew/flink-commerce-abnormal-detection:latest}
         depends_on:
             - kafka
         ports:
@@ -69,11 +69,9 @@ services:
         environment:
             FLINK_PROPERTIES: |
                 jobmanager.rpc.address: jobmanager
-        volumes:
-            - ./:/workspace
 
     taskmanager:
-        image: flink:1.17.2-scala_2.12-java11
+        image: ${FLINK_APP_IMAGE:-cloverdew/flink-commerce-abnormal-detection:latest}
         depends_on:
             - jobmanager
         command: taskmanager
@@ -81,12 +79,15 @@ services:
             FLINK_PROPERTIES: |
                 jobmanager.rpc.address: jobmanager
                 taskmanager.numberOfTaskSlots: 4
-        volumes:
-            - ./:/workspace
 
-    runner:
-        image: maven:3.9.6-eclipse-temurin-11
-        working_dir: /workspace
+    tools:
+        image: ${FLINK_APP_IMAGE:-cloverdew/flink-commerce-abnormal-detection:latest}
+        depends_on:
+            - kafka
+            - jobmanager
+        working_dir: /opt/app
         entrypoint: ["/bin/bash", "-lc", "sleep infinity"]
         volumes:
-            - ./:/workspace
+            - ./docker/conf:/opt/app/conf
+            - ./data:/opt/app/data
+            - ./samples:/opt/app/samples

@@ -64,6 +64,8 @@ public class CepPatternFactory {
                 return createAbnormalLoginPattern(rule);
             case HIGH_FREQ_ACCESS :
                 return createHighFrequencyPattern(rule);
+            case PAYMENT_FRAUD :
+                return createPaymentFraudPattern(rule);
             default :
                 return createGenericPattern(rule);
         }

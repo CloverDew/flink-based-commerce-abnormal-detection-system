@@ -23,8 +23,9 @@ Kaggle CSV
                                          Kafka: alerts / PrintSink
 
 Runtime Config:
-- docker/conf/bootstrap.conf    (数据导入参数)
-- docker/conf/flink-job.conf    (并行度、状态后端、checkpoint 参数)
+- /opt/app/conf/bootstrap.conf  (镜像内默认数据导入参数)
+- /opt/app/conf/flink-job.conf  (镜像内默认 Flink 作业参数)
+- 环境变量覆盖                (运行时覆盖 Kafka/topic/checkpoint 等)
 ```
 
 ## 输出与反馈层（告警推送 + 实时看板 + 特征缓存）
@@ -310,100 +311,120 @@ flink run -c cn.edu.ustb.detection.AbnormalBehaviorDetectionJob \
 
 ## Docker 运行
 
-已提供 `docker-compose.yml` 与 `docker/scripts/*.sh`，数据导入和规则下发都可在容器内执行。
+推荐把 Flink 作业打成你自己的应用镜像（默认示例名：`cloverdew/flink-commerce-abnormal-detection`，也可用环境变量 `FLINK_APP_IMAGE` 改成你在 Docker Hub 上的任意仓库名）。当前 `docker-compose.yml` 仍然负责编排 Kafka、ClickHouse、Grafana、Redis，但 `jobmanager` / `taskmanager` / `tools` 都会使用同一个 Flink 应用镜像。
 
-### 1) 启动基础组件（Kafka + Flink）
+### 1) 构建并推送你的镜像
+
+```bash
+docker build -t cloverdew/flink-commerce-abnormal-detection:latest .
+docker login
+docker push cloverdew/flink-commerce-abnormal-detection:latest
+```
+
+如果是私有仓库，运行前先确保本机已完成 `docker login`。
+
+### 2) 指定 Compose 使用的镜像
+
+PowerShell:
+
+```powershell
+$env:FLINK_APP_IMAGE="cloverdew/flink-commerce-abnormal-detection:latest"
+```
+
+Bash:
+
+```bash
+export FLINK_APP_IMAGE=cloverdew/flink-commerce-abnormal-detection:latest
+```
+
+如果不设置，Compose 会默认使用 `cloverdew/flink-commerce-abnormal-detection:latest`。
+
+### 3) 启动基础组件（Kafka + Flink）
 
 ```bash
 docker compose up -d zookeeper kafka jobmanager taskmanager
 ```
 
-### 2) 在 Docker 内构建 Jar
+如需连同 ClickHouse / Grafana / Redis 一起启动：
 
 ```bash
-docker compose run --rm runner bash /workspace/docker/scripts/build-jar.sh
+docker compose up -d zookeeper kafka clickhouse grafana redis jobmanager taskmanager
 ```
 
-### 3) 准备配置文件（推荐）
+### 4) 准备数据文件
 
-编辑：
+把 Kaggle CSV 放到本地 `./data/kaggle-events.csv`。`tools` 服务会把它挂载到容器内 `/opt/app/data/kaggle-events.csv`。
 
-- `docker/conf/flink-job.conf`
-- `docker/conf/bootstrap.conf`
-
-最常用参数：
-
-- `PROFILE=multi_category`
-- `INPUT_CSV=/workspace/data/kaggle-events.csv`
-- `PARALLELISM=2`
-- `STATE_BACKEND=hashmap`（或 `rocksdb`）
-
-### 4) 在 Docker 内提交 Flink 任务（自动读取 .conf）
+### 5) 在 Docker 内提交 Flink 任务
 
 ```bash
-docker compose run --rm --entrypoint /bin/bash jobmanager \
-  -lc "/workspace/docker/scripts/submit-flink-job.sh"
+docker compose run --rm --entrypoint /bin/bash tools \
+  -lc "/opt/app/scripts/submit-flink-job.sh"
 ```
 
-### 5) 在 Docker 内导入 Kaggle 数据 + 下发规则（自动读取 .conf）
+### 6) 在 Docker 内导入 Kaggle 数据 + 下发规则
 
 ```bash
-docker compose run --rm runner \
-  bash /workspace/docker/scripts/bootstrap-kaggle.sh
+docker compose run --rm --entrypoint /bin/bash tools \
+  -lc "/opt/app/scripts/bootstrap-kaggle.sh"
 ```
 
-### 6) 一键端到端（构建 + 提交任务 + 导数）
+### 7) 一键端到端
 
 ```bash
-docker compose run --rm --entrypoint /bin/bash jobmanager \
-  -lc "/workspace/docker/scripts/run-e2e.sh"
+docker compose run --rm --entrypoint /bin/bash tools \
+  -lc "/opt/app/scripts/run-e2e.sh"
 ```
 
-### 最短可执行路径（建议直接用）
+### 最短可执行路径
 
 ```bash
-# 0. 准备数据
-# 把 Kaggle CSV 放到 ./data/kaggle-events.csv
+# 0. 先把 Kaggle CSV 放到 ./data/kaggle-events.csv
 
-# 1. 启动基础服务
+# 1. 告诉 Compose 使用你的镜像
+export FLINK_APP_IMAGE=cloverdew/flink-commerce-abnormal-detection:latest
+
+# 2. 启动基础服务
 docker compose up -d zookeeper kafka jobmanager taskmanager
-
-# 2. 构建
-docker compose run --rm runner bash /workspace/docker/scripts/build-jar.sh
 
 # 3. 提交 Flink 任务
-docker compose run --rm --entrypoint /bin/bash jobmanager -lc "/workspace/docker/scripts/submit-flink-job.sh"
+docker compose run --rm --entrypoint /bin/bash tools -lc "/opt/app/scripts/submit-flink-job.sh"
 
 # 4. 导入规则 + 行为数据
-docker compose run --rm runner bash /workspace/docker/scripts/bootstrap-kaggle.sh
+docker compose run --rm --entrypoint /bin/bash tools -lc "/opt/app/scripts/bootstrap-kaggle.sh"
+```
+
+### 镜像内默认配置与覆盖
+
+镜像内已提供两份默认配置文件：
+
+- `/opt/app/conf/flink-job.conf`
+- `/opt/app/conf/bootstrap.conf`
+
+默认脚本行为：
+
+- `submit-flink-job.sh` 优先读取 `/opt/app/conf/flink-job.conf`
+- `bootstrap-kaggle.sh` 优先读取 `/opt/app/conf/bootstrap.conf`
+- 本地 `./docker/conf` 会挂载到 `/opt/app/conf`（便于用仓库里的 `flink-job.conf` / `bootstrap.conf` 覆盖镜像默认，例如论文实验脚本会改写 `flink-job.conf`）
+- 本地 `./data` 会挂载到 `/opt/app/data`
+- 本地 `./samples` 会挂载到 `/opt/app/samples`
+
+推荐通过环境变量覆盖运行时差异，而不是重新 build 镜像。例如：
+
+```bash
+docker compose run --rm --entrypoint /bin/bash \
+  -e PARALLELISM=4 \
+  -e STATE_BACKEND=rocksdb \
+  -e INPUT_CSV=/opt/app/data/kaggle-events.csv \
+  tools -lc "/opt/app/scripts/bootstrap-kaggle.sh"
 ```
 
 ### 脚本说明
 
-- `docker/scripts/build-jar.sh`：容器内构建 fat jar
-- `docker/scripts/submit-flink-job.sh`：提交 Flink 作业
+- `docker/scripts/build-jar.sh`：本地源码模式下构建 fat jar
+- `docker/scripts/submit-flink-job.sh`：提交 Flink 作业，优先使用镜像内 jar 与配置
 - `docker/scripts/bootstrap-kaggle.sh`：生成规则模板、发布规则、导入 Kaggle 行为数据
 - `docker/scripts/run-e2e.sh`：一键串行执行
-
-### `.conf` 配置化启动（推荐）
-
-已提供两个配置文件：
-
-- `docker/conf/flink-job.conf`：并行度、状态后端、checkpoint 参数
-- `docker/conf/bootstrap.conf`：数据导入 profile、输入文件、规则版本等
-
-脚本会在启动时自动加载：
-
-- `submit-flink-job.sh` 默认加载 `docker/conf/flink-job.conf`
-- `bootstrap-kaggle.sh` 默认加载 `docker/conf/bootstrap.conf`
-
-你也可以指定其他配置文件：
-
-```bash
-docker compose run --rm --entrypoint /bin/bash \
-  -e CONF_FILE=/workspace/docker/conf/flink-job.conf \
-  jobmanager -lc "/workspace/docker/scripts/submit-flink-job.sh"
-```
 
 ## 参数影响与观测建议
 

@@ -5,9 +5,7 @@ import cn.edu.ustb.detection.model.RiskRule;
 import cn.edu.ustb.detection.model.UserBehavior;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedList;
 import java.util.List;
-import java.util.stream.Collectors;
 import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.common.state.ListState;
@@ -32,6 +30,7 @@ import org.slf4j.LoggerFactory;
 public class AbnormalPatternDetector {
 
     private static final Logger LOG = LoggerFactory.getLogger(AbnormalPatternDetector.class);
+    private static final long ALLOWED_OUT_OF_ORDERNESS_MS = 5_000L;
 
     private AbnormalPatternDetector() {
     }
@@ -50,17 +49,17 @@ public class AbnormalPatternDetector {
                 .name("Stateful Order Brush");
         DataStream<AlertEvent> hfAlerts = keyed.process(new CountWithinWindowProcess(RiskRule.RuleType.HIGH_FREQ_ACCESS))
                 .name("Stateful High Frequency Access");
-
-        // Keep credential stuffing detector in CEP module (not used by thesis experiments but retained).
         DataStream<AlertEvent> csAlerts = keyed.process(new CredentialStuffingProcess()).name("Stateful Credential Stuffing");
+        DataStream<AlertEvent> pfAlerts = keyed.process(new PaymentFraudProcess()).name("Stateful Payment Fraud");
 
-        LOG.info("Stateful detector wired: credentialStuffing + abnormalLogin + orderBrush + highFreqAccess");
-        return csAlerts.union(abAlerts).union(obAlerts).union(hfAlerts);
+        LOG.info("Stateful detector wired: credentialStuffing + abnormalLogin + orderBrush + highFreqAccess + paymentFraud");
+        return csAlerts.union(abAlerts).union(obAlerts).union(hfAlerts).union(pfAlerts);
     }
 
     private static class CountWithinWindowProcess extends KeyedProcessFunction<String, Tuple2<UserBehavior, RiskRule>, AlertEvent> {
         private final RiskRule.RuleType type;
         private transient ListState<UserBehavior> eventsState;
+        private transient ValueState<Long> maxSeenTimestamp;
         private transient ValueState<Long> lastEmittedAt;
 
         private CountWithinWindowProcess(RiskRule.RuleType type) {
@@ -70,6 +69,7 @@ public class AbnormalPatternDetector {
         @Override
         public void open(Configuration parameters) {
             eventsState = getRuntimeContext().getListState(new ListStateDescriptor<>("events", UserBehavior.class));
+            maxSeenTimestamp = getRuntimeContext().getState(new ValueStateDescriptor<>("maxSeenTimestamp", Long.class));
             lastEmittedAt = getRuntimeContext().getState(new ValueStateDescriptor<>("lastEmittedAt", Long.class));
         }
 
@@ -87,35 +87,34 @@ public class AbnormalPatternDetector {
             long ts = e.getTimestamp();
             long window = Math.max(1L, rule.getWindowSizeMs());
             int threshold = Math.max(1, rule.getThreshold());
-
-            LinkedList<UserBehavior> buf = new LinkedList<>();
-            for (UserBehavior old : eventsState.get()) {
-                if (old != null && (ts - old.getTimestamp()) <= window) {
-                    buf.add(old);
-                }
-            }
+            List<UserBehavior> buf = loadEvents(eventsState);
             buf.add(e);
-            eventsState.update(buf);
+            long newMax = updateMaxTimestamp(maxSeenTimestamp, ts);
+            buf = pruneRecent(buf, newMax, window);
 
-            // Emit once per key per window to avoid huge duplicates.
-            Long last = lastEmittedAt.value();
-            boolean recentlyEmitted = last != null && (ts - last) <= window;
-            if (!recentlyEmitted && buf.size() >= threshold) {
-                AlertEvent alert = AlertEvent.fromRuleMatch(rule, new ArrayList<>(buf));
-                out.collect(alert);
-                lastEmittedAt.update(ts);
-                // Keep buffer (allows downstream latency metrics); but cap memory by clearing after emit.
+            List<UserBehavior> matched = findCountWindow(buf, window, threshold);
+            if (matched != null && isNewMatch(lastEmittedAt, matched)) {
+                emitAlert(rule, matched, out);
+                lastEmittedAt.update(matched.get(matched.size() - 1).getTimestamp());
                 eventsState.clear();
+                maxSeenTimestamp.clear();
+                return;
             }
+            eventsState.update(buf);
         }
     }
 
     private static class AbnormalLoginProcess extends KeyedProcessFunction<String, Tuple2<UserBehavior, RiskRule>, AlertEvent> {
-        private transient ValueState<UserBehavior> lastLogin;
+        private transient ListState<UserBehavior> relevantEvents;
+        private transient ValueState<Long> maxSeenTimestamp;
+        private transient ValueState<Long> lastEmittedAt;
 
         @Override
         public void open(Configuration parameters) {
-            lastLogin = getRuntimeContext().getState(new ValueStateDescriptor<>("lastLogin", UserBehavior.class));
+            relevantEvents = getRuntimeContext()
+                    .getListState(new ListStateDescriptor<>("abnormalLoginEvents", UserBehavior.class));
+            maxSeenTimestamp = getRuntimeContext().getState(new ValueStateDescriptor<>("abnormalLoginMaxSeen", Long.class));
+            lastEmittedAt = getRuntimeContext().getState(new ValueStateDescriptor<>("abnormalLoginLastEmit", Long.class));
         }
 
         @Override
@@ -129,36 +128,33 @@ public class AbnormalPatternDetector {
             if (!RiskRule.RuleType.ABNORMAL_LOGIN.equals(rule.getRuleType())) {
                 return;
             }
-            String action = e.getActionType();
-            if (CepPatternFactory.isLoginSuccess(action)) {
-                lastLogin.update(e);
+            List<UserBehavior> buf = loadEvents(relevantEvents);
+            buf.add(e);
+            long newMax = updateMaxTimestamp(maxSeenTimestamp, e.getTimestamp());
+            buf = pruneRecent(buf, newMax, Math.max(1L, rule.getWindowSizeMs()));
+
+            List<UserBehavior> matched = findAbnormalLoginMatch(buf, rule.getWindowSizeMs());
+            if (matched != null && isNewMatch(lastEmittedAt, matched)) {
+                emitAlert(rule, matched, out);
+                lastEmittedAt.update(matched.get(matched.size() - 1).getTimestamp());
+                relevantEvents.clear();
+                maxSeenTimestamp.clear();
                 return;
             }
-            if (!CepPatternFactory.isSensitiveAction(action)) {
-                return;
-            }
-            UserBehavior login = lastLogin.value();
-            if (login == null) {
-                return;
-            }
-            long dt = e.getTimestamp() - login.getTimestamp();
-            if (dt < 0 || dt > rule.getWindowSizeMs()) {
-                return;
-            }
-            List<UserBehavior> events = new ArrayList<>();
-            events.add(login);
-            events.add(e);
-            out.collect(AlertEvent.fromRuleMatch(rule, events));
-            lastLogin.clear();
+            relevantEvents.update(buf);
         }
     }
 
     private static class CredentialStuffingProcess extends KeyedProcessFunction<String, Tuple2<UserBehavior, RiskRule>, AlertEvent> {
         private transient ListState<UserBehavior> fails;
+        private transient ValueState<Long> maxSeenTimestamp;
+        private transient ValueState<Long> lastEmittedAt;
 
         @Override
         public void open(Configuration parameters) {
             fails = getRuntimeContext().getListState(new ListStateDescriptor<>("fails", UserBehavior.class));
+            maxSeenTimestamp = getRuntimeContext().getState(new ValueStateDescriptor<>("credentialMaxSeen", Long.class));
+            lastEmittedAt = getRuntimeContext().getState(new ValueStateDescriptor<>("credentialLastEmit", Long.class));
         }
 
         @Override
@@ -172,69 +168,217 @@ public class AbnormalPatternDetector {
             if (!RiskRule.RuleType.CREDENTIAL_STUFFING.equals(rule.getRuleType())) {
                 return;
             }
-            String action = e.getActionType();
-            if (CepPatternFactory.isLoginFail(action)) {
-                LinkedList<UserBehavior> buf = new LinkedList<>();
-                for (UserBehavior old : fails.get()) {
-                    if (old != null) {
-                        buf.add(old);
-                    }
-                }
-                buf.add(e);
-                fails.update(buf);
+            if (!CepPatternFactory.isLoginFail(e.getActionType())) {
                 return;
             }
-            if (CepPatternFactory.isLoginSuccess(action)) {
-                List<UserBehavior> buf = new ArrayList<>();
-                for (UserBehavior old : fails.get()) {
-                    if (old != null) {
-                        buf.add(old);
-                    }
-                }
-                if (buf.size() >= rule.getThreshold()) {
-                    buf.add(e);
-                    out.collect(AlertEvent.fromRuleMatch(rule, buf));
-                }
+            List<UserBehavior> buf = loadEvents(fails);
+            buf.add(e);
+            long newMax = updateMaxTimestamp(maxSeenTimestamp, e.getTimestamp());
+            buf = pruneRecent(buf, newMax, Math.max(1L, rule.getWindowSizeMs()));
+            List<UserBehavior> matched = findCountWindow(buf, rule.getWindowSizeMs(), Math.max(1, rule.getThreshold()));
+            if (matched != null && isNewMatch(lastEmittedAt, matched)) {
+                emitAlert(rule, matched, out);
+                lastEmittedAt.update(matched.get(matched.size() - 1).getTimestamp());
                 fails.clear();
+                maxSeenTimestamp.clear();
+                return;
             }
+            fails.update(buf);
         }
     }
 
-    private static AlertEvent toAlertEvent(List<Tuple2<UserBehavior, RiskRule>> tuples) {
-        if (tuples == null || tuples.isEmpty()) {
-            return null;
-        }
-        List<Tuple2<UserBehavior, RiskRule>> sorted = tuples.stream()
-                .filter(t -> t != null && t.f0 != null && t.f1 != null)
-                .sorted(Comparator.comparingLong(t -> t.f0.getTimestamp()))
-                .collect(Collectors.toList());
-        if (sorted.isEmpty()) {
-            return null;
+    private static class PaymentFraudProcess extends KeyedProcessFunction<String, Tuple2<UserBehavior, RiskRule>, AlertEvent> {
+        private transient ListState<UserBehavior> payments;
+        private transient ValueState<Long> maxSeenTimestamp;
+        private transient ValueState<Long> lastEmittedAt;
+
+        @Override
+        public void open(Configuration parameters) {
+            payments = getRuntimeContext().getListState(new ListStateDescriptor<>("payments", UserBehavior.class));
+            maxSeenTimestamp = getRuntimeContext().getState(new ValueStateDescriptor<>("paymentFraudMaxSeen", Long.class));
+            lastEmittedAt = getRuntimeContext().getState(new ValueStateDescriptor<>("paymentFraudLastEmit", Long.class));
         }
 
-        RiskRule rule = sorted.get(sorted.size() - 1).f1;
-        List<UserBehavior> events = sorted.stream().map(t -> t.f0).collect(Collectors.toList());
+        @Override
+        public void processElement(Tuple2<UserBehavior, RiskRule> v, Context ctx, Collector<AlertEvent> out)
+                throws Exception {
+            if (v == null || v.f0 == null || v.f1 == null) {
+                return;
+            }
+            RiskRule rule = v.f1;
+            UserBehavior e = v.f0;
+            if (!RiskRule.RuleType.PAYMENT_FRAUD.equals(rule.getRuleType())) {
+                return;
+            }
+            List<UserBehavior> buf = loadEvents(payments);
+            buf.add(e);
+            long newMax = updateMaxTimestamp(maxSeenTimestamp, e.getTimestamp());
+            buf = pruneRecent(buf, newMax, Math.max(1L, rule.getWindowSizeMs()));
+            List<UserBehavior> matched = findPaymentFraudMatch(buf, rule.getWindowSizeMs(), Math.max(1, rule.getThreshold()));
+            if (matched != null && isNewMatch(lastEmittedAt, matched)) {
+                emitAlert(rule, matched, out);
+                lastEmittedAt.update(matched.get(matched.size() - 1).getTimestamp());
+                payments.clear();
+                maxSeenTimestamp.clear();
+                return;
+            }
+            payments.update(buf);
+        }
+    }
 
+    private static List<UserBehavior> loadEvents(ListState<UserBehavior> state) throws Exception {
+        List<UserBehavior> rows = new ArrayList<>();
+        for (UserBehavior event : state.get()) {
+            if (event != null) {
+                rows.add(event);
+            }
+        }
+        return rows;
+    }
+
+    private static long updateMaxTimestamp(ValueState<Long> maxSeenState, long eventTs) throws Exception {
+        Long current = maxSeenState.value();
+        long next = current == null ? eventTs : Math.max(current, eventTs);
+        maxSeenState.update(next);
+        return next;
+    }
+
+    private static List<UserBehavior> pruneRecent(List<UserBehavior> events, long maxSeenTs, long window) {
+        long minKeepTs = Math.max(0L, maxSeenTs - window - ALLOWED_OUT_OF_ORDERNESS_MS);
+        List<UserBehavior> kept = new ArrayList<>();
+        for (UserBehavior event : events) {
+            if (event != null && event.getTimestamp() >= minKeepTs) {
+                kept.add(event);
+            }
+        }
+        kept.sort(Comparator.comparingLong(UserBehavior::getTimestamp));
+        return kept;
+    }
+
+    private static boolean isNewMatch(ValueState<Long> lastEmittedAt, List<UserBehavior> matched) throws Exception {
+        if (matched == null || matched.isEmpty()) {
+            return false;
+        }
+        Long last = lastEmittedAt.value();
+        long lastMatchedTs = matched.get(matched.size() - 1).getTimestamp();
+        return last == null || lastMatchedTs > last.longValue();
+    }
+
+    private static List<UserBehavior> findCountWindow(List<UserBehavior> events, long window, int threshold) {
+        if (events == null || events.size() < threshold) {
+            return null;
+        }
+        int left = 0;
+        for (int right = 0; right < events.size(); right++) {
+            while (left < right && events.get(right).getTimestamp() - events.get(left).getTimestamp() > window) {
+                left++;
+            }
+            if (right - left + 1 >= threshold) {
+                return new ArrayList<>(events.subList(left, right + 1));
+            }
+        }
+        return null;
+    }
+
+    private static List<UserBehavior> findAbnormalLoginMatch(List<UserBehavior> events, long window) {
+        if (events == null || events.size() < 2) {
+            return null;
+        }
+        UserBehavior latestLogin = null;
+        for (UserBehavior event : events) {
+            if (event == null) {
+                continue;
+            }
+            String action = event.getActionType();
+            if (CepPatternFactory.isLoginSuccess(action)) {
+                latestLogin = event;
+                continue;
+            }
+            if (!CepPatternFactory.isSensitiveAction(action) || latestLogin == null) {
+                continue;
+            }
+            long delta = event.getTimestamp() - latestLogin.getTimestamp();
+            if (delta >= 0L && delta <= window) {
+                List<UserBehavior> matched = new ArrayList<>();
+                matched.add(latestLogin);
+                matched.add(event);
+                return matched;
+            }
+        }
+        return null;
+    }
+
+    private static List<UserBehavior> findPaymentFraudMatch(List<UserBehavior> events, long window, int threshold) {
+        if (events == null || events.isEmpty()) {
+            return null;
+        }
+        for (int i = 0; i < events.size(); i++) {
+            UserBehavior candidate = events.get(i);
+            if (!isSuspiciousPayment(candidate)) {
+                continue;
+            }
+            List<UserBehavior> smalls = new ArrayList<>();
+            for (int j = 0; j < i; j++) {
+                UserBehavior previous = events.get(j);
+                if (previous == null) {
+                    continue;
+                }
+                long delta = candidate.getTimestamp() - previous.getTimestamp();
+                if (delta < 0L || delta > window) {
+                    continue;
+                }
+                if (isSmallPayment(previous)) {
+                    smalls.add(previous);
+                }
+            }
+            if (smalls.size() >= threshold) {
+                List<UserBehavior> matched = new ArrayList<>(smalls);
+                matched.add(candidate);
+                return matched;
+            }
+        }
+        return null;
+    }
+
+    private static boolean isSmallPayment(UserBehavior event) {
+        return event != null && CepPatternFactory.isPayment(event.getActionType()) && event.getAmount() != null
+                && event.getAmount().doubleValue() < 100.0d;
+    }
+
+    private static boolean isSuspiciousPayment(UserBehavior event) {
+        if (event == null) {
+            return false;
+        }
+        if (CepPatternFactory.isPaymentFraud(event.getActionType())) {
+            return true;
+        }
+        return CepPatternFactory.isPayment(event.getActionType()) && event.getAmount() != null
+                && event.getAmount().doubleValue() >= 1000.0d;
+    }
+
+    private static void emitAlert(RiskRule rule, List<UserBehavior> matchedEvents, Collector<AlertEvent> out) {
+        AlertEvent alert = toAlertEvent(rule, matchedEvents);
+        if (alert != null) {
+            out.collect(alert);
+        }
+    }
+
+    private static AlertEvent toAlertEvent(RiskRule rule, List<UserBehavior> matchedEvents) {
+        if (rule == null || matchedEvents == null || matchedEvents.isEmpty()) {
+            return null;
+        }
+        List<UserBehavior> events = new ArrayList<>(matchedEvents);
+        events.sort(Comparator.comparingLong(UserBehavior::getTimestamp));
         long firstTs = events.get(0).getTimestamp();
         long lastTs = events.get(events.size() - 1).getTimestamp();
-        if (lastTs - firstTs > rule.getWindowSizeMs()) {
+        if (lastTs < firstTs || lastTs - firstTs > rule.getWindowSizeMs()) {
             return null;
         }
-
-        if (RiskRule.RuleType.CREDENTIAL_STUFFING.equals(rule.getRuleType())) {
-            long failCount = events.stream().filter(e -> e != null && CepPatternFactory.isLoginFail(e.getActionType()))
-                    .count();
-            if (failCount < rule.getThreshold()) {
-                return null;
-            }
-        } else if (events.size() < rule.getThreshold()) {
-            return null;
-        }
-
         AlertEvent alert = AlertEvent.fromRuleMatch(rule, events);
-        double densityPerSec = events.size() / Math.max(1.0, rule.getWindowSizeMs() / 1000.0);
+        double densityPerSec = events.size() / Math.max(1.0d, rule.getWindowSizeMs() / 1000.0d);
         double score = rule.getSeverityWeight()
-                * ((double) events.size() / Math.max(1, rule.getThreshold()) + Math.min(1.5, densityPerSec / 10.0));
+                * (1.0d + ((double) events.size() / Math.max(1, rule.getThreshold()))
+                        + Math.min(1.5d, densityPerSec / 10.0d));
         alert.setRiskScore(score);
         return score >= rule.getScoreThreshold() ? alert : null;
     }

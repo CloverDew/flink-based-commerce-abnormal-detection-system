@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Collectors;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
@@ -46,7 +47,7 @@ public class AbnormalBehaviorDetectionJobTest {
     @BeforeEach
     void setup() {
         env = StreamExecutionEnvironment.getExecutionEnvironment();
-        env.setParallelism(2);
+        env.setParallelism(1);
         CollectSink.clear();
     }
 
@@ -55,44 +56,28 @@ public class AbnormalBehaviorDetectionJobTest {
         CollectSink.clear();
     }
 
-    /**
-     * 测试撞库攻击检测 场景：同一 IP 在 1 分钟内连续 3 次登录失败
-     *
-     * <p>
-     * 注意：由于流处理的异步特性，在测试环境中规则流和事件流的处理顺序不确定。 此测试验证的是管道构建的正确性，实际的集成测试应在更完整的环境中进行。
-     */
     @Test
     @DisplayName("Test credential stuffing attack detection")
     void testCredentialStuffingDetection() throws Exception {
         RiskRule rule = createCredentialStuffingRule();
-
         long baseTime = System.currentTimeMillis();
         List<UserBehavior> events = new ArrayList<>();
-
         events.add(createLoginFailEvent("user1", "192.168.1.100", baseTime));
         events.add(createLoginFailEvent("user2", "192.168.1.100", baseTime + 10_000));
         events.add(createLoginFailEvent("user3", "192.168.1.100", baseTime + 20_000));
         events.add(createLoginFailEvent("user4", "192.168.1.100", baseTime + 30_000));
 
-        DataStream<AlertEvent> alertStream = buildTestPipeline(env, events, rule);
+        DataStream<AlertEvent> alertStream = buildDetectorOnlyPipeline(env, events, rule);
         alertStream.addSink(new CollectSink());
-
         env.execute("Credential Stuffing Test");
-
         List<AlertEvent> alerts = CollectSink.getValues();
-        LOG.info("Collected {} alerts", alerts.size());
-
-        // 由于流处理的异步特性，测试环境中可能无法保证规则先于事件被处理
-        // 这里只验证管道执行不抛异常，实际告警检测需要在更完整的集成环境中验证
-        LOG.info("Pipeline executed successfully, collected {} alerts", alerts.size());
-
-        for (AlertEvent alert : alerts) {
-            assertNotNull(alert.getAlertId());
-            assertEquals(rule.getRuleId(), alert.getRuleId());
-            assertEquals(RiskRule.RuleType.CREDENTIAL_STUFFING, alert.getRuleType());
-            assertTrue(alert.getMatchCount() >= rule.getThreshold());
-            LOG.info("Alert: {}", alert);
-        }
+        assertFalse(alerts.isEmpty(), "Expected credential stuffing alert to be emitted");
+        AlertEvent first = alerts.get(0);
+        assertNotNull(first.getAlertId());
+        assertEquals(rule.getRuleId(), first.getRuleId());
+        assertEquals(RiskRule.RuleType.CREDENTIAL_STUFFING, first.getRuleType());
+        assertTrue(first.getMatchCount() >= rule.getThreshold());
+        assertTrue(first.getRiskScore() >= rule.getScoreThreshold());
     }
 
     /** 测试刷单检测 场景：同一用户在 1 分钟内下单 5 次 */
@@ -108,21 +93,13 @@ public class AbnormalBehaviorDetectionJobTest {
             events.add(createOrderEvent("user123", "192.168.1.1", baseTime + i * 5_000));
         }
 
-        DataStream<AlertEvent> alertStream = buildTestPipeline(env, events, rule);
+        DataStream<AlertEvent> alertStream = buildDetectorOnlyPipeline(env, events, rule);
         alertStream.addSink(new CollectSink());
-
         env.execute("Order Brush Test");
-
         List<AlertEvent> alerts = CollectSink.getValues();
-        LOG.info("Collected {} alerts for order brush", alerts.size());
-
-        // 验证管道执行成功
-        LOG.info("Order brush pipeline executed successfully");
-
-        for (AlertEvent alert : alerts) {
-            assertEquals(rule.getRuleId(), alert.getRuleId());
-            assertEquals(RiskRule.RuleType.ORDER_BRUSH, alert.getRuleType());
-        }
+        assertFalse(alerts.isEmpty(), "Expected order brush alert to be emitted");
+        assertTrue(alerts.stream().allMatch(alert -> rule.getRuleId().equals(alert.getRuleId())));
+        assertTrue(alerts.stream().allMatch(alert -> RiskRule.RuleType.ORDER_BRUSH.equals(alert.getRuleType())));
     }
 
     /** 测试规则热更新 场景：先加载规则 A，然后更新为规则 B */
@@ -149,11 +126,11 @@ public class AbnormalBehaviorDetectionJobTest {
 
         DataStream<AlertEvent> alertStream = buildTestPipelineWithMultipleRules(env, events, rules);
         alertStream.addSink(new CollectSink());
-
         env.execute("Dynamic Rule Update Test");
-
         List<AlertEvent> alerts = CollectSink.getValues();
-        LOG.info("Dynamic rule test - collected {} alerts", alerts.size());
+        assertFalse(alerts.isEmpty(), "Expected at least one alert after rule hot update");
+        assertTrue(alerts.stream().allMatch(alert -> "rule-dynamic-001".equals(alert.getRuleId())));
+        assertTrue(alerts.stream().allMatch(alert -> alert.getMatchCount() >= 5));
     }
 
     /** 测试无效事件过滤 */
@@ -177,7 +154,7 @@ public class AbnormalBehaviorDetectionJobTest {
         env.execute("Invalid Event Filtering Test");
 
         List<AlertEvent> alerts = CollectSink.getValues();
-        assertTrue(alerts.size() < 3, "Invalid events should be filtered out");
+        assertTrue(alerts.isEmpty(), "Invalid events should be filtered out before detection");
     }
 
     /** 测试跨窗口事件不触发告警 */
@@ -193,14 +170,61 @@ public class AbnormalBehaviorDetectionJobTest {
         events.add(createLoginFailEvent("user2", "192.168.1.100", baseTime + 120_000));
         events.add(createLoginFailEvent("user3", "192.168.1.100", baseTime + 240_000));
 
-        DataStream<AlertEvent> alertStream = buildTestPipeline(env, events, rule);
+        DataStream<AlertEvent> alertStream = buildDetectorOnlyPipeline(env, events, rule);
         alertStream.addSink(new CollectSink());
 
         env.execute("Events Outside Window Test");
 
         List<AlertEvent> alerts = CollectSink.getValues();
-        LOG.info("Events outside window - collected {} alerts", alerts.size());
         assertTrue(alerts.isEmpty(), "Events spread across windows should not trigger alert");
+    }
+
+    @Test
+    @DisplayName("Test payment fraud detection")
+    void testPaymentFraudDetection() throws Exception {
+        RiskRule rule = RiskRule.builder().ruleId("rule-payment-001").ruleName("Payment Fraud")
+                .ruleType(RiskRule.RuleType.PAYMENT_FRAUD).targetActionType("PAYMENT_FRAUD").windowSizeMs(60_000)
+                .threshold(3).groupKeyType(RiskRule.GroupKeyType.BY_USER_ID).severityWeight(2.5).scoreThreshold(2.5)
+                .version(1).build();
+
+        long baseTime = System.currentTimeMillis();
+        List<UserBehavior> events = new ArrayList<>();
+        events.add(createPaymentEvent("user-pay", baseTime, 12.0));
+        events.add(createPaymentEvent("user-pay", baseTime + 5_000, 25.0));
+        events.add(createPaymentEvent("user-pay", baseTime + 8_000, 36.0));
+        events.add(createPaymentFraudEvent("user-pay", baseTime + 12_000, 1500.0));
+
+        DataStream<AlertEvent> alertStream = buildDetectorOnlyPipeline(env, events, rule);
+        alertStream.addSink(new CollectSink());
+
+        env.execute("Payment Fraud Test");
+
+        List<AlertEvent> alerts = CollectSink.getValues();
+        assertFalse(alerts.isEmpty(), "Expected payment fraud alert to be emitted");
+        AlertEvent alert = alerts.get(0);
+        assertEquals(rule.getRuleId(), alert.getRuleId());
+        assertEquals(RiskRule.RuleType.PAYMENT_FRAUD, alert.getRuleType());
+        assertTrue(alert.getMatchCount() >= 4);
+    }
+
+    @Test
+    @DisplayName("Test out-of-order credential stuffing still triggers alert")
+    void testOutOfOrderCredentialStuffingDetection() throws Exception {
+        RiskRule rule = createCredentialStuffingRule();
+        long baseTime = System.currentTimeMillis();
+        List<UserBehavior> events = new ArrayList<>();
+        events.add(createLoginFailEvent("late-user-2", "192.168.1.101", baseTime + 20_000));
+        events.add(createLoginFailEvent("late-user-3", "192.168.1.101", baseTime + 30_000));
+        events.add(createLoginFailEvent("late-user-1", "192.168.1.101", baseTime + 10_000));
+
+        DataStream<AlertEvent> alertStream = buildDetectorOnlyPipeline(env, events, rule);
+        alertStream.addSink(new CollectSink());
+
+        env.execute("Out Of Order Credential Stuffing Test");
+
+        List<AlertEvent> alerts = CollectSink.getValues();
+        assertFalse(alerts.isEmpty(), "Expected alert even when fail events arrive out of order");
+        assertEquals(RiskRule.RuleType.CREDENTIAL_STUFFING, alerts.get(0).getRuleType());
     }
 
     /** 构建测试处理管道 */
@@ -208,6 +232,20 @@ public class AbnormalBehaviorDetectionJobTest {
             RiskRule rule) {
 
         return buildTestPipelineWithMultipleRules(env, events, Collections.singletonList(rule));
+    }
+
+    private DataStream<AlertEvent> buildDetectorOnlyPipeline(StreamExecutionEnvironment env, List<UserBehavior> events,
+            RiskRule rule) {
+        WatermarkStrategy<Tuple2<UserBehavior, RiskRule>> watermarkStrategy = WatermarkStrategy
+                .<Tuple2<UserBehavior, RiskRule>>forBoundedOutOfOrderness(Duration.ofSeconds(5))
+                .withTimestampAssigner((pair, ts) -> pair != null && pair.f0 != null ? pair.f0.getTimestamp() : 0L);
+
+        List<Tuple2<UserBehavior, RiskRule>> tuples = events.stream().filter(event -> event != null && event.isValid())
+                .map(event -> Tuple2.of(event, rule)).collect(Collectors.toList());
+
+        SingleOutputStreamOperator<Tuple2<UserBehavior, RiskRule>> matchedStream = env.fromCollection(tuples)
+                .assignTimestampsAndWatermarks(watermarkStrategy);
+        return AbnormalPatternDetector.buildAlertStream(matchedStream, KeySelectorFactory.createKeySelector());
     }
 
     /** 构建支持多规则的测试管道 */
@@ -254,6 +292,16 @@ public class AbnormalBehaviorDetectionJobTest {
 
     private UserBehavior createViewEvent(String userId, String ip, long timestamp) {
         return UserBehavior.builder().userId(userId).actionType("VIEW").ip(ip).timestamp(timestamp).build();
+    }
+
+    private UserBehavior createPaymentEvent(String userId, long timestamp, double amount) {
+        return UserBehavior.builder().userId(userId).actionType("PAYMENT").ip("10.0.0.8").timestamp(timestamp)
+                .amount(amount).build();
+    }
+
+    private UserBehavior createPaymentFraudEvent(String userId, long timestamp, double amount) {
+        return UserBehavior.builder().userId(userId).actionType("PAYMENT_FRAUD").ip("10.0.0.8").timestamp(timestamp)
+                .amount(amount).build();
     }
 
     /** 用于收集测试输出的 Sink */

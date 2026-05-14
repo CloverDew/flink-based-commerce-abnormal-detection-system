@@ -4,6 +4,8 @@ import java.io.Serializable;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -60,6 +62,13 @@ public class AlertEvent implements Serializable {
     /** 最后一个触发事件的时间戳 */
     private long lastEventTimestamp;
 
+    /**
+     * 处理滞后（毫秒）：告警发出时的墙钟时间与末条触发事件的事件时间之差（下限为 0）。
+     *
+     * <p>用于离线评估；避免将 {@link #alertTimestamp}（墙钟）与 {@link #lastEventTimestamp}（事件时间）直接相减产生误导性的负数或积压假象。
+     */
+    private long processingLagMs;
+
     /** 告警描述信息 */
     private String message;
 
@@ -77,15 +86,17 @@ public class AlertEvent implements Serializable {
         if (rule == null || matchedEvents == null || matchedEvents.isEmpty()) {
             throw new IllegalArgumentException("Rule and matched events cannot be null or empty");
         }
+        List<UserBehavior> sortedEvents = new ArrayList<>(matchedEvents);
+        sortedEvents.sort(Comparator.comparingLong(UserBehavior::getTimestamp));
 
         AlertEvent alert = new AlertEvent();
         alert.setRuleId(rule.getRuleId());
         alert.setRuleType(rule.getRuleType());
-        alert.setMatchCount(matchedEvents.size());
-        alert.setTriggerEvents(matchedEvents);
+        alert.setMatchCount(sortedEvents.size());
+        alert.setTriggerEvents(sortedEvents);
 
-        UserBehavior firstEvent = matchedEvents.get(0);
-        UserBehavior lastEvent = matchedEvents.get(matchedEvents.size() - 1);
+        UserBehavior firstEvent = sortedEvents.get(0);
+        UserBehavior lastEvent = sortedEvents.get(sortedEvents.size() - 1);
 
         alert.setUserId(firstEvent.getUserId());
         alert.setIp(firstEvent.getIp());
@@ -93,8 +104,12 @@ public class AlertEvent implements Serializable {
         alert.setFirstEventTimestamp(firstEvent.getTimestamp());
         alert.setLastEventTimestamp(lastEvent.getTimestamp());
 
-        alert.setLevel(determineAlertLevel(rule, matchedEvents.size()));
-        alert.setMessage(buildAlertMessage(rule, matchedEvents));
+        alert.setLevel(determineAlertLevel(rule, sortedEvents.size()));
+        alert.setMessage(buildAlertMessage(rule, sortedEvents));
+
+        long emittedAt = System.currentTimeMillis();
+        alert.setAlertTimestamp(emittedAt);
+        alert.setProcessingLagMs(Math.max(0L, emittedAt - lastEvent.getTimestamp()));
 
         return alert;
     }
@@ -224,6 +239,14 @@ public class AlertEvent implements Serializable {
 
     public void setLastEventTimestamp(long lastEventTimestamp) {
         this.lastEventTimestamp = lastEventTimestamp;
+    }
+
+    public long getProcessingLagMs() {
+        return processingLagMs;
+    }
+
+    public void setProcessingLagMs(long processingLagMs) {
+        this.processingLagMs = processingLagMs;
     }
 
     public String getMessage() {

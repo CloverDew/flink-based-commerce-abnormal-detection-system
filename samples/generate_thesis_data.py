@@ -5,6 +5,16 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
+from experiment_artifacts import (
+    CLASSIFICATION_DISCLAIMER,
+    CLASSIFICATION_LABEL,
+    ensure_run_layout,
+    file_record,
+    root_relative,
+    summarize_manifest,
+    update_manifest,
+)
+
 SAMPLES_DIR = Path("samples")
 SAMPLES_DIR.mkdir(exist_ok=True)
 
@@ -22,6 +32,7 @@ def parse_args():
     )
     parser.add_argument("--output-rules", default="samples/thesis-risk-rules.json")
     parser.add_argument("--output-events", default="samples/thesis-behavior-events.jsonl")
+    parser.add_argument("--run-id", default="", help="Optional run id; default outputs move under .data/experiment/runs/<run-id>/inputs.")
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
 
@@ -140,17 +151,35 @@ def fallback_normal_events(normal_limit: int, now_ms: int) -> List[Dict[str, Any
     return out
 
 
+def synthetic_schedule_horizon_ms(normal_limit: int, abnormal_user_count: int, window_ms: int, paper_profile: bool) -> int:
+    intra_login_gap = min(8000, max(400, window_ms // 10)) if paper_profile else min(5000, window_ms // 2)
+    order_spacing = min(400, max(80, window_ms // 80)) if paper_profile else 5000
+    view_spacing = min(45, max(12, window_ms // 150)) if paper_profile else 300
+    phase_ob = 8_000 if paper_profile else 12_000
+    phase_hf = 16_000 if paper_profile else 24_000
+    stagger_al = 80 if paper_profile else 120
+    stagger_ob = 120 if paper_profile else 180
+    stagger_hf = 160 if paper_profile else 240
+    abnormal_horizon = max(
+        abnormal_user_count * stagger_al + intra_login_gap,
+        phase_ob + abnormal_user_count * stagger_ob + 5 * order_spacing,
+        phase_hf + abnormal_user_count * stagger_hf + 100 * view_spacing,
+    )
+    normal_horizon = max(0, normal_limit * 20)
+    return max(normal_horizon, abnormal_horizon)
+
+
 def inject_abnormal_events(now_ms: int, abnormal_user_count: int, window_ms: int, paper_profile: bool) -> List[Dict[str, Any]]:
     events: List[Dict[str, Any]] = []
     intra_login_gap = min(8000, max(400, window_ms // 10)) if paper_profile else min(5000, window_ms // 2)
     order_spacing = min(400, max(80, window_ms // 80)) if paper_profile else 5000
     view_spacing = min(45, max(12, window_ms // 150)) if paper_profile else 300
     phase_al = 0
-    phase_ob = 150_000 if paper_profile else 200_000
-    phase_hf = 280_000 if paper_profile else 500_000
-    stagger_al = 600 if paper_profile else 1000
-    stagger_ob = 1200 if paper_profile else 2000
-    stagger_hf = 1500 if paper_profile else 3000
+    phase_ob = 8_000 if paper_profile else 12_000
+    phase_hf = 16_000 if paper_profile else 24_000
+    stagger_al = 80 if paper_profile else 120
+    stagger_ob = 120 if paper_profile else 180
+    stagger_hf = 160 if paper_profile else 240
 
     for i in range(abnormal_user_count):
         user_id = f"al_user_{i}"
@@ -199,26 +228,55 @@ def inject_abnormal_events(now_ms: int, abnormal_user_count: int, window_ms: int
 
 def main():
     args = parse_args()
+    layout = ensure_run_layout(args.run_id or None) if args.run_id else None
+    if layout is not None and args.output_rules == "samples/thesis-risk-rules.json":
+        args.output_rules = str(layout.inputs_dir / "thesis-risk-rules.json")
+    if layout is not None and args.output_events == "samples/thesis-behavior-events.jsonl":
+        args.output_events = str(layout.inputs_dir / "thesis-behavior-events.jsonl")
     random.seed(args.seed)
-    now = int(time.time() * 1000)
-    rules = build_rules(now, args.window_ms)
-
     abnormal_n = args.abnormal_user_count
     if args.paper_profile:
         abnormal_n = max(abnormal_n, 220)
+    synthetic_now = int(time.time() * 1000) - synthetic_schedule_horizon_ms(
+        args.normal_limit, abnormal_n, args.window_ms, args.paper_profile
+    ) - 30_000
+    rules = build_rules(synthetic_now, args.window_ms)
 
-    normal = load_normal_events(args.base_jsonl, args.normal_limit, now)
+    normal = load_normal_events(args.base_jsonl, args.normal_limit, synthetic_now)
     if not normal:
-        normal = fallback_normal_events(args.normal_limit, now)
+        normal = fallback_normal_events(args.normal_limit, synthetic_now)
 
-    abnormal = inject_abnormal_events(now, abnormal_n, args.window_ms, args.paper_profile)
+    abnormal = inject_abnormal_events(synthetic_now, abnormal_n, args.window_ms, args.paper_profile)
     events = normal + abnormal
-    events.sort(key=lambda x: int(x.get("timestamp", now)))
+    events.sort(key=lambda x: int(x.get("timestamp", synthetic_now)))
 
     Path(args.output_rules).write_text(json.dumps(rules, ensure_ascii=False, indent=2), encoding="utf-8")
     with Path(args.output_events).open("w", encoding="utf-8") as f:
         for event in events:
             f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+    if layout is not None:
+        update_manifest(
+            layout,
+            {
+                "generation": {
+                    "syntheticDataset": {
+                        "classificationLabel": CLASSIFICATION_LABEL,
+                        "disclaimer": CLASSIFICATION_DISCLAIMER,
+                        "generatorScript": root_relative(Path(__file__)),
+                        "baseJsonl": root_relative(Path(args.base_jsonl)) if args.base_jsonl else "",
+                        "normalLimit": args.normal_limit,
+                        "abnormalUserCount": abnormal_n,
+                        "windowMs": args.window_ms,
+                        "paperProfile": args.paper_profile,
+                        "seed": args.seed,
+                        "rulesFile": file_record(Path(args.output_rules)),
+                        "eventsFile": file_record(Path(args.output_events)),
+                    }
+                }
+            },
+        )
+        summarize_manifest(layout)
 
     print(
         f"rules={len(rules)} total_events={len(events)} normal_events={len(normal)} "

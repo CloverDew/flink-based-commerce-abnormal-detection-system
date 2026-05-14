@@ -197,6 +197,7 @@ public class ModelTest {
             assertEquals("192.168.1.1", alert.getIp());
             assertEquals(baseTime, alert.getFirstEventTimestamp());
             assertEquals(baseTime + 20000, alert.getLastEventTimestamp());
+            assertTrue(alert.getProcessingLagMs() >= 0L);
             assertNotNull(alert.getMessage());
         }
 
