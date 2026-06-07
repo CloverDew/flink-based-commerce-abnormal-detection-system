@@ -44,7 +44,133 @@ FIELDNAMES = [
     "p99_latency_ms",
     "cpu_pct",
     "mem_mb",
+    "expected_positive_users",
+    "detected_users",
+    "tp_users",
+    "fp_users",
+    "fn_users",
+    "precision",
+    "recall",
+    "f1",
+    "macro_precision",
+    "macro_recall",
+    "macro_f1",
 ]
+RULE_LABELS = {
+    "ABNORMAL_LOGIN": "Abnormal Login",
+    "ORDER_BRUSH": "Order Brush",
+    "HIGH_FREQ_ACCESS": "High Frequency Access",
+}
+RULE_METRIC_FIELDNAMES = [
+    "case",
+    "rule_type",
+    "rule_label",
+    "expected_users",
+    "detected_users",
+    "tp_users",
+    "fp_users",
+    "fn_users",
+    "precision",
+    "recall",
+    "f1",
+]
+LOGIN_FIXED_BUCKETS = (
+    {"bucket": "fast_pos", "ratio": 0.35, "gap_ms": 18_000, "expected_positive": True, "bucket_kind": "positive"},
+    {"bucket": "mid_pos", "ratio": 0.25, "gap_ms": 45_000, "expected_positive": True, "bucket_kind": "positive"},
+    {"bucket": "slow_pos", "ratio": 0.20, "gap_ms": 180_000, "expected_positive": True, "bucket_kind": "positive"},
+    {"bucket": "hard_neg", "ratio": 0.12, "gap_ms": 50_000, "expected_positive": False, "bucket_kind": "hard_negative"},
+    {
+        "bucket": "late_neg",
+        "ratio": 0.08,
+        "gap_ms": 330_000,
+        "expected_positive": False,
+        "bucket_kind": "window_edge_negative",
+    },
+)
+REPEATED_FIXED_BUCKETS = {
+    "ORDER_BRUSH": {
+        "action_type": "ORDER",
+        "events_per_user": 5,
+        "buckets": (
+            {
+                "bucket": "fast_pos",
+                "ratio": 0.35,
+                "spacing_ms": 4_000,
+                "expected_positive": True,
+                "bucket_kind": "positive",
+            },
+            {
+                "bucket": "mid_pos",
+                "ratio": 0.25,
+                "spacing_ms": 12_000,
+                "expected_positive": True,
+                "bucket_kind": "positive",
+            },
+            {
+                "bucket": "slow_pos",
+                "ratio": 0.20,
+                "spacing_ms": 70_000,
+                "expected_positive": True,
+                "bucket_kind": "positive",
+            },
+            {
+                "bucket": "hard_neg",
+                "ratio": 0.12,
+                "spacing_ms": 14_000,
+                "expected_positive": False,
+                "bucket_kind": "hard_negative",
+            },
+            {
+                "bucket": "late_neg",
+                "ratio": 0.08,
+                "spacing_ms": 90_000,
+                "expected_positive": False,
+                "bucket_kind": "window_edge_negative",
+            },
+        ),
+    },
+    "HIGH_FREQ_ACCESS": {
+        "action_type": "VIEW",
+        "events_per_user": 100,
+        "buckets": (
+            {
+                "bucket": "fast_pos",
+                "ratio": 0.35,
+                "spacing_ms": 250,
+                "expected_positive": True,
+                "bucket_kind": "positive",
+            },
+            {
+                "bucket": "mid_pos",
+                "ratio": 0.25,
+                "spacing_ms": 450,
+                "expected_positive": True,
+                "bucket_kind": "positive",
+            },
+            {
+                "bucket": "slow_pos",
+                "ratio": 0.20,
+                "spacing_ms": 2_500,
+                "expected_positive": True,
+                "bucket_kind": "positive",
+            },
+            {
+                "bucket": "hard_neg",
+                "ratio": 0.12,
+                "spacing_ms": 500,
+                "expected_positive": False,
+                "bucket_kind": "hard_negative",
+            },
+            {
+                "bucket": "late_neg",
+                "ratio": 0.08,
+                "spacing_ms": 3_800,
+                "expected_positive": False,
+                "bucket_kind": "window_edge_negative",
+            },
+        ),
+    },
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -264,71 +390,310 @@ def case_rule_payloads(case_name: str, window_ms: int, version: int) -> list[dic
     ]
 
 
+def precision_recall_f1(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    if precision + recall <= 0:
+        return precision, recall, 0.0
+    return precision, recall, 2 * precision * recall / (precision + recall)
+
+
+def alert_lag_ms(alert: dict[str, object], *, window_ms: int) -> float | None:
+    cap = float(max(120_000, int(window_ms) * 5))
+    processing_lag = alert.get("processingLagMs")
+    if processing_lag is not None and processing_lag != "":
+        try:
+            return max(0.0, min(float(processing_lag), cap))
+        except (TypeError, ValueError):
+            pass
+    alert_ts = alert.get("alertTimestamp")
+    last_event_ts = alert.get("lastEventTimestamp")
+    if alert_ts is None or last_event_ts is None:
+        return None
+    try:
+        return max(0.0, min(float(alert_ts) - float(last_event_ts), cap))
+    except (TypeError, ValueError):
+        return None
+
+
+def dedupe_alerts_by_rule_and_user(alerts: list[dict[str, object]], *, window_ms: int) -> list[dict[str, object]]:
+    best: dict[tuple[str, str], dict[str, object]] = {}
+    best_rank: dict[tuple[str, str], float] = {}
+    for alert in alerts:
+        rule_type = str(alert.get("ruleType", "")).strip()
+        user_id = str(alert.get("userId", "")).strip()
+        if not rule_type or not user_id:
+            continue
+        key = (rule_type, user_id)
+        lag = alert_lag_ms(alert, window_ms=window_ms)
+        rank = lag if lag is not None else float("inf")
+        if key not in best or rank < best_rank.get(key, float("inf")):
+            best[key] = alert
+            best_rank[key] = rank
+    return list(best.values())
+
+
+def allocate_counts(total: int, ratios: list[float]) -> list[int]:
+    if total <= 0 or not ratios:
+        return [0 for _ in ratios]
+    scaled = [max(0.0, ratio) * total for ratio in ratios]
+    counts = [int(value) for value in scaled]
+    remainder = total - sum(counts)
+    order = sorted(range(len(ratios)), key=lambda idx: scaled[idx] - counts[idx], reverse=True)
+    for idx in order[:remainder]:
+        counts[idx] += 1
+    return counts
+
+
+def background_event(action_type: str, user_id: str, timestamp: int, *, idx: int) -> dict[str, object]:
+    event: dict[str, object] = {
+        "userId": user_id,
+        "actionType": action_type,
+        "ip": f"172.16.{idx % 16}.{idx % 250 + 1}",
+        "timestamp": timestamp,
+        "sessionId": f"bg-{idx}",
+    }
+    if action_type in {"VIEW", "ORDER", "CART"}:
+        event["productId"] = f"bgp-{idx % 1000}"
+    if action_type == "ORDER":
+        event["amount"] = round(15 + (idx % 80) * 2.25, 2)
+    return event
+
+
+def compute_case_quality_metrics(
+    case_name: str,
+    scoped_alerts: list[dict[str, object]],
+    *,
+    expected_users_by_rule_type: dict[str, set[str]],
+    window_ms: int,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    deduped = dedupe_alerts_by_rule_and_user(scoped_alerts, window_ms=window_ms)
+    detected_by_rule_type: dict[str, set[str]] = {rule_type: set() for rule_type in RULE_LABELS}
+    for alert in deduped:
+        rule_type = str(alert.get("ruleType", "")).strip()
+        user_id = str(alert.get("userId", "")).strip()
+        if rule_type in detected_by_rule_type and user_id:
+            detected_by_rule_type[rule_type].add(user_id)
+
+    rule_rows: list[dict[str, object]] = []
+    tp_total = 0
+    fp_total = 0
+    fn_total = 0
+    macro_precision_values: list[float] = []
+    macro_recall_values: list[float] = []
+    macro_f1_values: list[float] = []
+    detected_total = 0
+
+    for rule_type, label in RULE_LABELS.items():
+        expected = expected_users_by_rule_type.get(rule_type, set())
+        detected = detected_by_rule_type.get(rule_type, set())
+        tp = len(expected & detected)
+        fp = len(detected - expected)
+        fn = len(expected - detected)
+        precision, recall, f1 = precision_recall_f1(tp, fp, fn)
+        tp_total += tp
+        fp_total += fp
+        fn_total += fn
+        detected_total += len(detected)
+        macro_precision_values.append(precision)
+        macro_recall_values.append(recall)
+        macro_f1_values.append(f1)
+        rule_rows.append(
+            {
+                "case": case_name,
+                "rule_type": rule_type,
+                "rule_label": label,
+                "expected_users": len(expected),
+                "detected_users": len(detected),
+                "tp_users": tp,
+                "fp_users": fp,
+                "fn_users": fn,
+                "precision": round(precision, 6),
+                "recall": round(recall, 6),
+                "f1": round(f1, 6),
+            }
+        )
+
+    micro_precision, micro_recall, micro_f1 = precision_recall_f1(tp_total, fp_total, fn_total)
+    macro_precision = sum(macro_precision_values) / len(macro_precision_values) if macro_precision_values else 0.0
+    macro_recall = sum(macro_recall_values) / len(macro_recall_values) if macro_recall_values else 0.0
+    macro_f1 = sum(macro_f1_values) / len(macro_f1_values) if macro_f1_values else 0.0
+    return (
+        {
+            "expected_positive_users": sum(len(users) for users in expected_users_by_rule_type.values()),
+            "detected_users": detected_total,
+            "tp_users": tp_total,
+            "fp_users": fp_total,
+            "fn_users": fn_total,
+            "precision": round(micro_precision, 6),
+            "recall": round(micro_recall, 6),
+            "f1": round(micro_f1, 6),
+            "macro_precision": round(macro_precision, 6),
+            "macro_recall": round(macro_recall, 6),
+            "macro_f1": round(macro_f1, 6),
+        },
+        rule_rows,
+    )
+
+
 def generate_rules_and_events(case_dir: Path, *, case_name: str, window_ms: int, event_count: int) -> dict[str, object]:
     version = int(time.time() * 1000)
     rules = case_rule_payloads(case_name, window_ms, version)
     rules_path = case_dir / "rules.json"
     rules_path.write_text(json.dumps(rules, ensure_ascii=False, indent=2), encoding="utf-8")
-    events = []
-    per_user = 107
-    group_n = max(1, min(event_count // per_user, 8000))
-    intra_login_gap = min(8000, max(800, window_ms // 8))
-    order_spacing = min(3500, max(120, window_ms // 25))
-    view_spacing = min(800, max(15, window_ms // 200))
-    phase_ob = 8_000
-    phase_hf = 16_000
-    stagger_al = min(80, max(10, window_ms // 2000))
-    stagger_ob = min(100, max(15, window_ms // 2500))
-    stagger_hf = min(120, max(20, window_ms // 3000))
-    schedule_horizon = max(
-        group_n * stagger_al + intra_login_gap,
-        phase_ob + group_n * stagger_ob + 5 * order_spacing,
-        phase_hf + group_n * stagger_hf + 100 * view_spacing,
-    )
-    now = int(time.time() * 1000) - schedule_horizon - 30_000
+    events: list[dict[str, object]] = []
+    expected_users_by_rule_type: dict[str, set[str]] = {rule_type: set() for rule_type in RULE_LABELS}
+    negative_users_by_rule_type: dict[str, set[str]] = {rule_type: set() for rule_type in RULE_LABELS}
+    per_pattern_user_budget = 107
+    group_n = max(1, min(event_count // per_pattern_user_budget, 8000))
+    background_count = max(0, event_count - group_n * per_pattern_user_budget)
     token = topic_token(case_name)
-    for i in range(group_n):
-        uid = f"al_u_{token}_{window_ms}_{i}"
-        ts = now + i * stagger_al
-        events.append({"userId": uid, "actionType": "LOGIN", "ip": f"10.0.0.{i%250+1}", "timestamp": ts, "sessionId": f"als-{i}"})
-        events.append(
+    user_seq = {rule_type: 0 for rule_type in RULE_LABELS}
+    bucket_summary: dict[str, list[dict[str, object]]] = {rule_type: [] for rule_type in RULE_LABELS}
+    max_offset = 0
+    phases = {
+        "ABNORMAL_LOGIN": 0,
+        "ORDER_BRUSH": 120_000,
+        "HIGH_FREQ_ACCESS": 360_000,
+        "BACKGROUND": 780_000,
+    }
+    staggers = {
+        "ABNORMAL_LOGIN": 45,
+        "ORDER_BRUSH": 65,
+        "HIGH_FREQ_ACCESS": 85,
+        "BACKGROUND": 30,
+    }
+
+    def append_login_bucket(
+        bucket_name: str,
+        count: int,
+        gap_ms: int,
+        *,
+        expected_positive: bool,
+        bucket_kind: str,
+    ) -> None:
+        nonlocal max_offset
+        bucket_summary["ABNORMAL_LOGIN"].append(
             {
-                "userId": uid,
-                "actionType": "CHANGE_PASSWORD",
-                "ip": f"10.0.1.{i%250+1}",
-                "timestamp": ts + intra_login_gap,
-                "sessionId": f"als-{i}",
+                "bucket": bucket_name,
+                "bucket_kind": bucket_kind,
+                "count": count,
+                "gap_ms": gap_ms,
+                "expected_positive": expected_positive,
             }
         )
-    for i in range(group_n):
-        uid = f"ob_u_{token}_{window_ms}_{i}"
-        base = now + phase_ob + i * stagger_ob
-        for k in range(5):
+        for _ in range(count):
+            idx = user_seq["ABNORMAL_LOGIN"]
+            user_seq["ABNORMAL_LOGIN"] += 1
+            user_id = f"al_{'pos' if expected_positive else 'neg'}_{token}_{bucket_name}_{idx}"
+            base = phases["ABNORMAL_LOGIN"] + idx * staggers["ABNORMAL_LOGIN"]
             events.append(
                 {
-                    "userId": uid,
-                    "actionType": "ORDER",
-                    "ip": f"10.1.0.{i%250+1}",
-                    "timestamp": base + k * order_spacing,
-                    "sessionId": f"obs-{i}",
-                    "productId": f"p{k}",
-                    "amount": 99.9,
+                    "userId": user_id,
+                    "actionType": "LOGIN",
+                    "ip": f"10.0.0.{idx % 250 + 1}",
+                    "timestamp": base,
+                    "sessionId": f"als-{idx}",
                 }
             )
-    for i in range(group_n):
-        uid = f"hf_u_{token}_{window_ms}_{i}"
-        base = now + phase_hf + i * stagger_hf
-        for k in range(100):
             events.append(
                 {
-                    "userId": uid,
-                    "actionType": "VIEW",
-                    "ip": f"10.2.0.{i%250+1}",
-                    "timestamp": base + k * view_spacing,
-                    "sessionId": f"hfs-{i}",
-                    "productId": f"pv{k%20}",
+                    "userId": user_id,
+                    "actionType": "CHANGE_PASSWORD",
+                    "ip": f"10.0.1.{idx % 250 + 1}",
+                    "timestamp": base + gap_ms,
+                    "sessionId": f"als-{idx}",
                 }
             )
+            if expected_positive:
+                expected_users_by_rule_type["ABNORMAL_LOGIN"].add(user_id)
+            else:
+                negative_users_by_rule_type["ABNORMAL_LOGIN"].add(user_id)
+            max_offset = max(max_offset, base + gap_ms)
+
+    def append_repeated_bucket(
+        rule_type: str,
+        bucket_name: str,
+        count: int,
+        action_type: str,
+        per_user_events: int,
+        spacing_ms: int,
+        expected_positive: bool,
+        bucket_kind: str,
+    ) -> None:
+        nonlocal max_offset
+        prefix = "ob" if rule_type == "ORDER_BRUSH" else "hf"
+        ip_prefix = "10.1.0" if rule_type == "ORDER_BRUSH" else "10.2.0"
+        session_prefix = "obs" if rule_type == "ORDER_BRUSH" else "hfs"
+        product_prefix = "p" if rule_type == "ORDER_BRUSH" else "pv"
+        bucket_summary[rule_type].append(
+            {
+                "bucket": bucket_name,
+                "bucket_kind": bucket_kind,
+                "count": count,
+                "spacing_ms": spacing_ms,
+                "events_per_user": per_user_events,
+                "expected_positive": expected_positive,
+            }
+        )
+        for _ in range(count):
+            idx = user_seq[rule_type]
+            user_seq[rule_type] += 1
+            user_id = f"{prefix}_{'pos' if expected_positive else 'neg'}_{token}_{bucket_name}_{idx}"
+            base = phases[rule_type] + idx * staggers[rule_type]
+            for event_idx in range(per_user_events):
+                event = {
+                    "userId": user_id,
+                    "actionType": action_type,
+                    "ip": f"{ip_prefix}.{idx % 250 + 1}",
+                    "timestamp": base + event_idx * spacing_ms,
+                    "sessionId": f"{session_prefix}-{idx}",
+                    "productId": f"{product_prefix}{event_idx % 20}",
+                }
+                if action_type == "ORDER":
+                    event["amount"] = 99.9 + event_idx
+                events.append(event)
+            if expected_positive:
+                expected_users_by_rule_type[rule_type].add(user_id)
+            else:
+                negative_users_by_rule_type[rule_type].add(user_id)
+            max_offset = max(max_offset, base + (per_user_events - 1) * spacing_ms)
+
+    login_counts = allocate_counts(group_n, [bucket["ratio"] for bucket in LOGIN_FIXED_BUCKETS])
+    for bucket_cfg, count in zip(LOGIN_FIXED_BUCKETS, login_counts):
+        append_login_bucket(
+            str(bucket_cfg["bucket"]),
+            count,
+            gap_ms=int(bucket_cfg["gap_ms"]),
+            expected_positive=bool(bucket_cfg["expected_positive"]),
+            bucket_kind=str(bucket_cfg["bucket_kind"]),
+        )
+
+    for rule_type, config in REPEATED_FIXED_BUCKETS.items():
+        bucket_counts = allocate_counts(group_n, [bucket["ratio"] for bucket in config["buckets"]])
+        for bucket_cfg, count in zip(config["buckets"], bucket_counts):
+            append_repeated_bucket(
+                rule_type,
+                str(bucket_cfg["bucket"]),
+                count,
+                str(config["action_type"]),
+                int(config["events_per_user"]),
+                int(bucket_cfg["spacing_ms"]),
+                bool(bucket_cfg["expected_positive"]),
+                str(bucket_cfg["bucket_kind"]),
+            )
+
+    background_actions = ["SEARCH", "CLICK", "VIEW", "ORDER", "CART"]
+    for idx in range(background_count):
+        action_type = background_actions[idx % len(background_actions)]
+        user_id = f"bg_{token}_{idx}"
+        timestamp = phases["BACKGROUND"] + idx * staggers["BACKGROUND"]
+        events.append(background_event(action_type, user_id, timestamp, idx=idx))
+        max_offset = max(max_offset, timestamp)
+
+    start_ts = int(time.time() * 1000) - max_offset - 30_000
+    for event in events:
+        event["timestamp"] = int(event["timestamp"]) + start_ts
 
     events.sort(key=lambda e: int(e["timestamp"]))
     events = events[:event_count]
@@ -345,11 +710,16 @@ def generate_rules_and_events(case_dir: Path, *, case_name: str, window_ms: int,
             "classificationLabel": CLASSIFICATION_LABEL,
             "disclaimer": CLASSIFICATION_DISCLAIMER,
             "windowMs": window_ms,
+            "fixedTimingTiers": True,
             "requestedEvents": event_count,
             "actualEvents": len(events),
             "cohortUsersPerPattern": group_n,
-            "patterns": ["ABNORMAL_LOGIN", "ORDER_BRUSH", "HIGH_FREQ_ACCESS"],
+            "backgroundEvents": background_count,
+            "positiveUsersByRuleType": {rule_type: len(users) for rule_type, users in expected_users_by_rule_type.items()},
+            "negativeUsersByRuleType": {rule_type: len(users) for rule_type, users in negative_users_by_rule_type.items()},
+            "patterns": bucket_summary,
         },
+        "expected_users_by_rule_type": expected_users_by_rule_type,
     }
 
 
@@ -450,9 +820,17 @@ def publish_events_and_measure(events_path: Path, behavior_topic: str) -> tuple[
     return duration, cpu_avg, mem_avg
 
 
-def capture_alerts(case_dir: Path, *, case_name: str, alert_topic: str) -> tuple[Path, list[dict[str, object]]]:
+def capture_alerts(
+    case_dir: Path,
+    *,
+    case_name: str,
+    alert_topic: str,
+    parallelism: int = 1,
+) -> tuple[Path, list[dict[str, object]]]:
     out_file = case_dir / f"alerts-{case_name}.jsonl"
     group_id = f"exp-capture-{topic_token(case_name)}-{int(time.time() * 1000)}"
+    # Higher parallelism runs need longer drain time before the consumer times out.
+    consumer_timeout_ms = min(90_000, 28_000 + max(1, parallelism) * 8_000)
     p = subprocess.run(
         [
             "docker",
@@ -469,7 +847,7 @@ def capture_alerts(case_dir: Path, *, case_name: str, alert_topic: str) -> tuple
             "--consumer-property",
             "auto.offset.reset=earliest",
             "--timeout-ms",
-            "25000",
+            str(consumer_timeout_ms),
         ],
         cwd=ROOT,
         capture_output=True,
@@ -533,15 +911,15 @@ def latency_metrics(alerts: list[dict[str, object]], *, window_ms: int = 60_000)
     return sum(lats) / len(lats), p99
 
 
-def write_rows(path: Path, rows: list[dict[str, object]]) -> list[dict[str, object]]:
+def write_rows(path: Path, rows: list[dict[str, object]], *, fieldnames: list[str] = FIELDNAMES) -> list[dict[str, object]]:
     with path.open("w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
     return rows
 
 
-def run_case(layout, *, name: str, parallelism: int, window_ms: int, backend: str, event_count: int) -> dict[str, object]:
+def run_case(layout, *, name: str, parallelism: int, window_ms: int, backend: str, event_count: int) -> tuple[dict[str, object], list[dict[str, object]]]:
     case_dir = layout.cases_dir / name
     case_dir.mkdir(parents=True, exist_ok=True)
     topics = case_topics(layout.run_id, name)
@@ -558,9 +936,20 @@ def run_case(layout, *, name: str, parallelism: int, window_ms: int, backend: st
     events_path = generated["events_path"]
     publish_rules(rules_path, topics["rule_topic"])
     duration, cpu_avg, mem_avg = publish_events_and_measure(events_path, topics["behavior_topic"])
-    alerts_path, raw_alerts = capture_alerts(case_dir, case_name=name, alert_topic=topics["alert_topic"])
+    alerts_path, raw_alerts = capture_alerts(
+        case_dir,
+        case_name=name,
+        alert_topic=topics["alert_topic"],
+        parallelism=parallelism,
+    )
     scoped_alerts, unexpected_alerts = filter_alert_scope(raw_alerts, set(generated["rule_ids"]))
     avg_lat, p99_lat = latency_metrics(scoped_alerts, window_ms=window_ms)
+    quality_summary, rule_metrics = compute_case_quality_metrics(
+        name,
+        scoped_alerts,
+        expected_users_by_rule_type=generated["expected_users_by_rule_type"],
+        window_ms=window_ms,
+    )
     throughput = generated["event_count"] / duration if duration > 0 else 0.0
     result = {
         "case": name,
@@ -577,7 +966,10 @@ def run_case(layout, *, name: str, parallelism: int, window_ms: int, backend: st
         "p99_latency_ms": round(p99_lat, 3),
         "cpu_pct": round(cpu_avg, 6),
         "mem_mb": round(mem_avg, 6),
+        **quality_summary,
     }
+    rule_metrics_path = case_dir / "rule_metrics.csv"
+    write_rows(rule_metrics_path, rule_metrics, fieldnames=RULE_METRIC_FIELDNAMES)
     case_result_path = case_dir / "result.json"
     write_json(
         case_result_path,
@@ -589,16 +981,21 @@ def run_case(layout, *, name: str, parallelism: int, window_ms: int, backend: st
                 "disclaimer": CLASSIFICATION_DISCLAIMER,
             },
             "generator": generated["generator"],
+            "quality": {
+                "summary": quality_summary,
+                "ruleMetrics": rule_metrics,
+            },
             "files": {
                 "rules": file_record(rules_path),
                 "events": file_record(events_path),
                 "alerts": file_record(alerts_path),
+                "ruleMetrics": file_record(rule_metrics_path),
             },
             "unexpectedRuleIds": sorted({str(a.get("ruleId", "")) for a in unexpected_alerts if a.get("ruleId")}),
             "generatedAt": now_iso_utc(),
         },
     )
-    return result
+    return result, rule_metrics
 
 
 def main() -> None:
@@ -647,20 +1044,23 @@ def main() -> None:
     )
 
     results = []
+    all_rule_metrics: list[dict[str, object]] = []
     for case in planned_cases:
-        results.append(
-            run_case(
-                layout,
-                name=case["name"],
-                parallelism=case["parallelism"],
-                window_ms=case["window_ms"],
-                backend=case["backend"],
-                event_count=case["event_count"],
-            )
+        result, rule_rows = run_case(
+            layout,
+            name=case["name"],
+            parallelism=case["parallelism"],
+            window_ms=case["window_ms"],
+            backend=case["backend"],
+            event_count=case["event_count"],
         )
+        results.append(result)
+        all_rule_metrics.extend(rule_rows)
 
     all_results_path = layout.root / "all_results.csv"
     write_rows(all_results_path, results)
+    rule_metrics_path = layout.root / "rule_metrics.csv"
+    write_rows(rule_metrics_path, all_rule_metrics, fieldnames=RULE_METRIC_FIELDNAMES)
     p_rows = write_rows(layout.root / "perf_parallelism.csv", [r for r in results if str(r["case"]).startswith("p")])
     w_rows = write_rows(layout.root / "perf_windows.csv", [r for r in results if str(r["case"]).startswith("w")])
     b_rows = write_rows(layout.root / "perf_backend.csv", [r for r in results if str(r["case"]).startswith("b")])
@@ -704,6 +1104,7 @@ def main() -> None:
             "metrics": {
                 "resultTables": {
                     "allResults": file_record(all_results_path),
+                    "ruleMetrics": file_record(rule_metrics_path),
                     "parallelism": file_record(layout.root / "perf_parallelism.csv"),
                     "windows": file_record(layout.root / "perf_windows.csv"),
                     "backend": file_record(layout.root / "perf_backend.csv"),
@@ -719,15 +1120,20 @@ def main() -> None:
         },
     )
     summarize_manifest(layout)
+    top_level_files = [
+        all_results_path,
+        rule_metrics_path,
+        layout.root / "perf_parallelism.csv",
+        layout.root / "perf_windows.csv",
+        layout.root / "perf_backend.csv",
+        layout.root / "scalability.csv",
+    ]
+    functional_metrics_path = layout.root / "functional_metrics.csv"
+    if functional_metrics_path.exists():
+        top_level_files.append(functional_metrics_path)
     mirror_latest_run(
         layout,
-        top_level_files=[
-            all_results_path,
-            layout.root / "perf_parallelism.csv",
-            layout.root / "perf_windows.csv",
-            layout.root / "perf_backend.csv",
-            layout.root / "scalability.csv",
-        ],
+        top_level_files=top_level_files,
         include_figures=(layout.figures_dir / "index.html").exists(),
     )
     print("done", len(results), "cases", layout.run_id)
