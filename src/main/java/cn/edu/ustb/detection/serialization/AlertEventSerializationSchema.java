@@ -9,8 +9,7 @@ import java.nio.charset.StandardCharsets;
 import javax.annotation.Nullable;
 import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 告警事件 Kafka 序列化器
@@ -18,10 +17,10 @@ import org.slf4j.LoggerFactory;
  * <p>
  * 将 AlertEvent 对象序列化为 JSON 格式并发送到 Kafka。 使用 userId 作为分区键，确保同一用户的告警发送到同一分区。
  */
+@Slf4j
 public class AlertEventSerializationSchema implements KafkaRecordSerializationSchema<AlertEvent> {
 
     private static final long serialVersionUID = 1L;
-    private static final Logger LOG = LoggerFactory.getLogger(AlertEventSerializationSchema.class);
 
     private final String topic;
     private transient ObjectMapper objectMapper;
@@ -45,7 +44,7 @@ public class AlertEventSerializationSchema implements KafkaRecordSerializationSc
     @Override
     public ProducerRecord<byte[], byte[]> serialize(AlertEvent alert, KafkaSinkContext context, Long timestamp) {
         if (alert == null) {
-            LOG.warn("Received null alert event, skipping serialization");
+            log.warn("Received null alert event, skipping serialization");
             return null;
         }
 
@@ -57,14 +56,14 @@ public class AlertEventSerializationSchema implements KafkaRecordSerializationSc
                     ? alert.getUserId().getBytes(StandardCharsets.UTF_8)
                     : alert.getAlertId().getBytes(StandardCharsets.UTF_8);
 
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Serialized alert event: alertId={}, ruleId={}, userId={}", alert.getAlertId(),
+            if (log.isDebugEnabled()) {
+                log.debug("Serialized alert event: alertId={}, ruleId={}, userId={}", alert.getAlertId(),
                         alert.getRuleId(), alert.getUserId());
             }
 
             return new ProducerRecord<>(topic, null, alert.getAlertTimestamp(), key, value);
         } catch (JsonProcessingException e) {
-            LOG.error("Failed to serialize alert event: {}, error: {}", alert.getAlertId(), e.getMessage());
+            log.error("Failed to serialize alert event: {}, error: {}", alert.getAlertId(), e.getMessage());
             return null;
         }
     }

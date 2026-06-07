@@ -2,13 +2,20 @@ package cn.edu.ustb.detection.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonSetter;
+import java.io.Serializable;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.io.Serializable;
-import java.util.Objects;
+import lombok.AccessLevel;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+import lombok.ToString;
 
 /**
  * 用户行为事件实体类
@@ -18,6 +25,13 @@ import java.util.Objects;
  * 模式匹配。
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
+@Getter
+@Setter
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor(access = AccessLevel.PRIVATE)
+@ToString
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class UserBehavior implements Serializable {
 
     private static final long serialVersionUID = 1L;
@@ -27,100 +41,36 @@ public class UserBehavior implements Serializable {
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"),
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS")};
 
+    @EqualsAndHashCode.Include
     private String userId;
+
+    @EqualsAndHashCode.Include
+    @Setter(AccessLevel.NONE)
     private String actionType;
+
+    @EqualsAndHashCode.Include
     private String ip;
+
+    @EqualsAndHashCode.Include
     private long timestamp;
+
+    @EqualsAndHashCode.Include
     private String sessionId;
+
     private String deviceId;
     private String productId;
     private Double amount;
     private String extra;
 
-    public UserBehavior() {
-    }
-
     public UserBehavior(String userId, String actionType, String ip, long timestamp) {
         this.userId = userId;
-        this.actionType = actionType;
+        setActionType(actionType);
         this.ip = ip;
         this.timestamp = timestamp;
-    }
-
-    public static Builder builder() {
-        return new Builder();
-    }
-
-    public String getUserId() {
-        return userId;
-    }
-
-    public void setUserId(String userId) {
-        this.userId = userId;
-    }
-
-    public String getActionType() {
-        return actionType;
     }
 
     public void setActionType(String actionType) {
         this.actionType = normalizeActionType(actionType);
-    }
-
-    public String getIp() {
-        return ip;
-    }
-
-    public void setIp(String ip) {
-        this.ip = ip;
-    }
-
-    public long getTimestamp() {
-        return timestamp;
-    }
-
-    public void setTimestamp(long timestamp) {
-        this.timestamp = timestamp;
-    }
-
-    public String getSessionId() {
-        return sessionId;
-    }
-
-    public void setSessionId(String sessionId) {
-        this.sessionId = sessionId;
-    }
-
-    public String getDeviceId() {
-        return deviceId;
-    }
-
-    public void setDeviceId(String deviceId) {
-        this.deviceId = deviceId;
-    }
-
-    public String getProductId() {
-        return productId;
-    }
-
-    public void setProductId(String productId) {
-        this.productId = productId;
-    }
-
-    public Double getAmount() {
-        return amount;
-    }
-
-    public void setAmount(Double amount) {
-        this.amount = amount;
-    }
-
-    public String getExtra() {
-        return extra;
-    }
-
-    public void setExtra(String extra) {
-        this.extra = extra;
     }
 
     @JsonSetter("user_id")
@@ -242,80 +192,11 @@ public class UserBehavior implements Serializable {
         return raw;
     }
 
-    @Override
-    public boolean equals(Object o) {
-        if (this == o)
-            return true;
-        if (o == null || getClass() != o.getClass())
-            return false;
-        UserBehavior that = (UserBehavior) o;
-        return timestamp == that.timestamp && Objects.equals(userId, that.userId)
-                && Objects.equals(actionType, that.actionType) && Objects.equals(ip, that.ip)
-                && Objects.equals(sessionId, that.sessionId);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(userId, actionType, ip, timestamp, sessionId);
-    }
-
-    @Override
-    public String toString() {
-        return "UserBehavior{" + "userId='" + userId + '\'' + ", actionType='" + actionType + '\'' + ", ip='" + ip
-                + '\'' + ", timestamp=" + timestamp + ", sessionId='" + sessionId + '\'' + ", deviceId='" + deviceId
-                + '\'' + ", productId='" + productId + '\'' + ", amount=" + amount + '}';
-    }
-
-    public static class Builder {
-        private final UserBehavior behavior = new UserBehavior();
-
-        public Builder userId(String userId) {
-            behavior.setUserId(userId);
+    /** Ensure {@link Builder} normalizes action types the same way as {@link #setActionType(String)}. */
+    public static class UserBehaviorBuilder {
+        public UserBehaviorBuilder actionType(String actionType) {
+            this.actionType = normalizeActionType(actionType);
             return this;
-        }
-
-        public Builder actionType(String actionType) {
-            behavior.setActionType(actionType);
-            return this;
-        }
-
-        public Builder ip(String ip) {
-            behavior.setIp(ip);
-            return this;
-        }
-
-        public Builder timestamp(long timestamp) {
-            behavior.setTimestamp(timestamp);
-            return this;
-        }
-
-        public Builder sessionId(String sessionId) {
-            behavior.setSessionId(sessionId);
-            return this;
-        }
-
-        public Builder deviceId(String deviceId) {
-            behavior.setDeviceId(deviceId);
-            return this;
-        }
-
-        public Builder productId(String productId) {
-            behavior.setProductId(productId);
-            return this;
-        }
-
-        public Builder amount(Double amount) {
-            behavior.setAmount(amount);
-            return this;
-        }
-
-        public Builder extra(String extra) {
-            behavior.setExtra(extra);
-            return this;
-        }
-
-        public UserBehavior build() {
-            return behavior;
         }
     }
 }

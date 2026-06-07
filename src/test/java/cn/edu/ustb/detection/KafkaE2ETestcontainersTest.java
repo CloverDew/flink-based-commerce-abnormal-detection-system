@@ -35,8 +35,7 @@ import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -44,9 +43,8 @@ import org.testcontainers.utility.DockerImageName;
 
 @Testcontainers(disabledWithoutDocker = true)
 @EnabledIfSystemProperty(named = "it.testcontainers", matches = "true")
+@Slf4j
 public class KafkaE2ETestcontainersTest {
-
-    private static final Logger LOG = LoggerFactory.getLogger(KafkaE2ETestcontainersTest.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private static final String BEHAVIOR_TOPIC = "tc-user-behavior";
@@ -79,9 +77,9 @@ public class KafkaE2ETestcontainersTest {
         assertTrue(alerts.stream().anyMatch(v -> v.contains("tc-rule-credential-stuffing")),
                 "Expected alert to include rule id");
 
-        LOG.info("Captured alerts: {}", alerts.size());
-        LOG.info("Alert summaries: {}", summarizeAlerts(alerts));
-        LOG.info("Rule aggregate table:\n{}", buildRuleAggregateTable(alerts));
+        log.info("Captured alerts: {}", alerts.size());
+        log.info("Alert summaries: {}", summarizeAlerts(alerts));
+        log.info("Rule aggregate table:\n{}", buildRuleAggregateTable(alerts));
         jobClient.cancel().get(10, TimeUnit.SECONDS);
     }
 

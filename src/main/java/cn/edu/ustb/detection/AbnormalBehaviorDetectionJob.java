@@ -25,25 +25,23 @@ import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.runtime.state.hashmap.HashMapStateBackend;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 /**
- * 电商异常用户行为实时检测系统 - 主任务入口
+ * ?????????????? - ?????
  *
  * <p>
- * 系统架构： 1. 用户行为事件流 (Kafka: user-behavior-topic) ↓ 2. Watermark 分配（Event Time +
- * 乱序处理） ↓ 3. 与规则流（Broadcast State）连接 ↓ 4. 动态规则匹配（DynamicRuleProcessor） ↓ 5.
- * 异常模式检测（AbnormalPatternDetector） ↓ 6. 告警输出 (Kafka: alert-topic / Print)
+ * ????? 1. ??????? (Kafka: user-behavior-topic) ? 2. Watermark ???Event Time +
+ * ????? ? 3. ?????Broadcast State??? ? 4. ???????DynamicRuleProcessor? ? 5.
+ * ???????AbnormalPatternDetector? ? 6. ???? (Kafka: alert-topic / Print)
  *
  * <p>
- * 启动参数示例： --kafka.bootstrap.servers localhost:9092 --kafka.behavior.topic
+ * ??????? --kafka.bootstrap.servers localhost:9092 --kafka.behavior.topic
  * user-behavior --kafka.rule.topic risk-rules --kafka.alert.topic alerts
  * --kafka.group.id flink-detection-group
  */
+@Slf4j
 public class AbnormalBehaviorDetectionJob {
-
-    private static final Logger LOG = LoggerFactory.getLogger(AbnormalBehaviorDetectionJob.class);
 
     private static final String DEFAULT_BOOTSTRAP_SERVERS = "localhost:9092";
     private static final String DEFAULT_BEHAVIOR_TOPIC = "user-behavior";
@@ -52,7 +50,7 @@ public class AbnormalBehaviorDetectionJob {
     private static final String DEFAULT_GROUP_ID = "flink-detection-group";
 
     public static void main(String[] args) throws Exception {
-        LOG.info("Starting Abnormal Behavior Detection Job...");
+        log.info("Starting Abnormal Behavior Detection Job...");
 
         ParameterTool params = ParameterTool.fromArgs(args);
 
@@ -65,7 +63,7 @@ public class AbnormalBehaviorDetectionJob {
         boolean debugPrintMatched = params.getBoolean("debug.matched.print", false);
         boolean debugPrintAlerts = params.getBoolean("debug.alert.print", false);
 
-        LOG.info("Configuration - bootstrapServers: {}, behaviorTopic: {}, ruleTopic: {}, alertTopic: {}, groupId: {}",
+        log.info("Configuration - bootstrapServers: {}, behaviorTopic: {}, ruleTopic: {}, alertTopic: {}, groupId: {}",
                 bootstrapServers, behaviorTopic, ruleTopic, alertTopic, groupId);
 
         StreamExecutionEnvironment env = createExecutionEnvironment(params);
@@ -76,16 +74,16 @@ public class AbnormalBehaviorDetectionJob {
         if (enableKafkaSink) {
             KafkaSink<AlertEvent> kafkaSink = createKafkaSink(bootstrapServers, alertTopic);
             alertStream.sinkTo(kafkaSink).name("Kafka Alert Sink");
-            LOG.info("Alert sink configured: Kafka topic={}", alertTopic);
+            log.info("Alert sink configured: Kafka topic={}", alertTopic);
         } else {
             alertStream.print().name("Print Alert Sink");
-            LOG.info("Alert sink configured: Console output");
+            log.info("Alert sink configured: Console output");
         }
 
         env.execute("E-commerce Abnormal Behavior Detection");
     }
 
-    /** 创建并配置 Flink 执行环境 */
+    /** ????? Flink ???? */
     public static StreamExecutionEnvironment createExecutionEnvironment(ParameterTool params) {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
@@ -105,7 +103,7 @@ public class AbnormalBehaviorDetectionJob {
                 checkpointMaxConcurrent, checkpointTolerableFailures, checkpointUnaligned, externalizedRetained);
         env.setParallelism(parallelism);
 
-        LOG.info(
+        log.info(
                 "Execution environment configured: parallelism={}, stateBackend={}, ck.interval={}ms, ck.timeout={}ms, ck.minPause={}ms",
                 parallelism, stateBackend, checkpointIntervalMs, checkpointTimeoutMs, checkpointMinPauseMs);
 
@@ -122,7 +120,7 @@ public class AbnormalBehaviorDetectionJob {
 
         if (checkpointStorage != null && !checkpointStorage.trim().isEmpty()) {
             env.getCheckpointConfig().setCheckpointStorage(checkpointStorage.trim());
-            LOG.info("Configured checkpoint storage: {}", checkpointStorage);
+            log.info("Configured checkpoint storage: {}", checkpointStorage);
         }
     }
 
@@ -141,7 +139,7 @@ public class AbnormalBehaviorDetectionJob {
                         : ExternalizedCheckpointCleanup.DELETE_ON_CANCELLATION);
     }
 
-    /** 构建处理拓扑 */
+    /** ?????? */
     public static DataStream<AlertEvent> buildPipeline(StreamExecutionEnvironment env, String bootstrapServers,
             String behaviorTopic, String ruleTopic, String groupId, boolean debugPrintMatched,
             boolean debugPrintAlerts) {
@@ -156,7 +154,7 @@ public class AbnormalBehaviorDetectionJob {
                     @Override
                     public long extractTimestamp(UserBehavior event, long recordTimestamp) {
                         if (event == null || event.getTimestamp() <= 0) {
-                            LOG.warn("Invalid timestamp in event, using current time: {}", event);
+                            log.warn("Invalid timestamp in event, using current time: {}", event);
                             return System.currentTimeMillis();
                         }
                         return event.getTimestamp();
@@ -166,7 +164,7 @@ public class AbnormalBehaviorDetectionJob {
         SingleOutputStreamOperator<UserBehavior> behaviorStream = env
                 .fromSource(behaviorSource, watermarkStrategy, "Kafka Behavior Source").filter(event -> {
                     if (event == null || !event.isValid()) {
-                        LOG.warn("Filtered invalid event: {}", event);
+                        log.warn("Filtered invalid event: {}", event);
                         return false;
                     }
                     return true;
@@ -175,7 +173,7 @@ public class AbnormalBehaviorDetectionJob {
         DataStream<RiskRule> ruleStream = env
                 .fromSource(ruleSource, WatermarkStrategy.noWatermarks(), "Kafka Rule Source").filter(rule -> {
                     if (rule == null) {
-                        LOG.warn("Filtered null rule");
+                        log.warn("Filtered null rule");
                         return false;
                     }
                     return true;
@@ -187,7 +185,6 @@ public class AbnormalBehaviorDetectionJob {
         SingleOutputStreamOperator<Tuple2<UserBehavior, RiskRule>> matchedStream = behaviorStream
                 .connect(broadcastRuleStream).process(new DynamicRuleProcessor()).name("Dynamic Rule Processor");
 
-        // Paper-aligned: use CEP/NFA detector module (with pattern factory).
         DataStream<AlertEvent> alertStream = AbnormalPatternDetector.buildAlertStream(matchedStream,
                 KeySelectorFactory.createKeySelector());
 
@@ -199,21 +196,21 @@ public class AbnormalBehaviorDetectionJob {
                 return "MATCHED ruleType=" + v.f1.getRuleType() + " ruleId=" + v.f1.getRuleId() + " action="
                         + v.f0.getActionType() + " userId=" + v.f0.getUserId() + " ts=" + v.f0.getTimestamp();
             }).name("DEBUG Matched Print").print("DEBUG");
-            LOG.warn("DEBUG enabled: printing matchedStream to logs");
+            log.warn("DEBUG enabled: printing matchedStream to logs");
         }
         if (debugPrintAlerts) {
             alertStream.map(a -> a == null ? "ALERT<null>" : "ALERT ruleType=" + a.getRuleType() + " ruleId="
                     + a.getRuleId() + " userId=" + a.getUserId() + " matchCount=" + a.getMatchCount() + " ts="
                     + a.getAlertTimestamp()).name("DEBUG Alert Print").print("ALERT");
-            LOG.warn("DEBUG enabled: printing alertStream to logs");
+            log.warn("DEBUG enabled: printing alertStream to logs");
         }
 
-        LOG.info("Processing pipeline built successfully");
+        log.info("Processing pipeline built successfully");
 
         return alertStream;
     }
 
-    /** 创建用户行为事件 Kafka Source */
+    /** ???????? Kafka Source */
     private static KafkaSource<UserBehavior> createBehaviorSource(String bootstrapServers, String topic,
             String groupId) {
 
@@ -223,7 +220,7 @@ public class AbnormalBehaviorDetectionJob {
                 .setProperty("partition.discovery.interval.ms", "30000").build();
     }
 
-    /** 创建规则流 Kafka Source */
+    /** ????? Kafka Source */
     private static KafkaSource<RiskRule> createRuleSource(String bootstrapServers, String topic, String groupId) {
 
         return KafkaSource.<RiskRule>builder().setBootstrapServers(bootstrapServers).setTopics(topic)
@@ -231,7 +228,7 @@ public class AbnormalBehaviorDetectionJob {
                 .setValueOnlyDeserializer(new JsonDeserializationSchema<>(RiskRule.class)).build();
     }
 
-    /** 创建告警 Kafka Sink */
+    /** ???? Kafka Sink */
     private static KafkaSink<AlertEvent> createKafkaSink(String bootstrapServers, String topic) {
         return KafkaSink.<AlertEvent>builder().setBootstrapServers(bootstrapServers)
                 .setRecordSerializer(new AlertEventSerializationSchema(topic))

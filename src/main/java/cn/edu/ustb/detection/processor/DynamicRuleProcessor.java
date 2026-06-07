@@ -12,8 +12,7 @@ import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.streaming.api.functions.co.BroadcastProcessFunction;
 import org.apache.flink.util.Collector;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 动态规则处理器
@@ -28,12 +27,12 @@ import org.slf4j.LoggerFactory;
  * <p>
  * 输出：Tuple2<UserBehavior, RiskRule> 表示事件与匹配的规则对
  */
+@Slf4j
 public class DynamicRuleProcessor
         extends
             BroadcastProcessFunction<UserBehavior, RiskRule, Tuple2<UserBehavior, RiskRule>> {
 
     private static final long serialVersionUID = 1L;
-    private static final Logger LOG = LoggerFactory.getLogger(DynamicRuleProcessor.class);
 
     /** 规则状态描述符（Broadcast State） */
     public static final MapStateDescriptor<String, RiskRule> RULE_STATE_DESCRIPTOR = new MapStateDescriptor<>(
@@ -46,14 +45,14 @@ public class DynamicRuleProcessor
             Collector<Tuple2<UserBehavior, RiskRule>> out) throws Exception {
 
         if (event == null || !event.isValid()) {
-            LOG.warn("Received invalid user behavior event, skipping: {}", event);
+            log.warn("Received invalid user behavior event, skipping: {}", event);
             return;
         }
 
         ReadOnlyBroadcastState<String, RiskRule> ruleState = ctx.getBroadcastState(RULE_STATE_DESCRIPTOR);
 
         if (ruleState == null) {
-            LOG.debug("Rule state is null, no rules loaded yet");
+            log.debug("Rule state is null, no rules loaded yet");
             return;
         }
 
@@ -70,15 +69,15 @@ public class DynamicRuleProcessor
                 out.collect(Tuple2.of(event, rule));
                 matchedRuleCount++;
 
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("Event matched rule: userId={}, actionType={}, ruleId={}, ruleType={}", event.getUserId(),
+                if (log.isDebugEnabled()) {
+                    log.debug("Event matched rule: userId={}, actionType={}, ruleId={}, ruleType={}", event.getUserId(),
                             event.getActionType(), rule.getRuleId(), rule.getRuleType());
                 }
             }
         }
 
-        if (matchedRuleCount == 0 && LOG.isTraceEnabled()) {
-            LOG.trace("No rule matched for event: userId={}, actionType={}", event.getUserId(), event.getActionType());
+        if (matchedRuleCount == 0 && log.isTraceEnabled()) {
+            log.trace("No rule matched for event: userId={}, actionType={}", event.getUserId(), event.getActionType());
         }
     }
 
@@ -88,14 +87,14 @@ public class DynamicRuleProcessor
             Collector<Tuple2<UserBehavior, RiskRule>> out) throws Exception {
 
         if (rule == null) {
-            LOG.warn("Received null rule from broadcast stream, skipping");
+            log.warn("Received null rule from broadcast stream, skipping");
             return;
         }
 
         BroadcastState<String, RiskRule> ruleState = ctx.getBroadcastState(RULE_STATE_DESCRIPTOR);
 
         if (rule.getRuleId() == null || rule.getRuleId().isEmpty()) {
-            LOG.warn("Rule ID is null or empty, skipping: {}", rule);
+            log.warn("Rule ID is null or empty, skipping: {}", rule);
             return;
         }
 
@@ -104,26 +103,26 @@ public class DynamicRuleProcessor
         if (RiskRule.RuleStatus.DISABLED.equals(rule.getStatus())) {
             if (existingRule != null) {
                 ruleState.remove(rule.getRuleId());
-                LOG.info("Rule disabled and removed from state: ruleId={}, ruleName={}", rule.getRuleId(),
+                log.info("Rule disabled and removed from state: ruleId={}, ruleName={}", rule.getRuleId(),
                         rule.getRuleName());
             }
             return;
         }
 
         if (!rule.isValid()) {
-            LOG.warn("Rule validation failed, skipping: {}", rule);
+            log.warn("Rule validation failed, skipping: {}", rule);
             return;
         }
 
         if (existingRule != null && existingRule.getVersion() >= rule.getVersion()) {
-            LOG.info("Received older or same version rule, skipping: ruleId={}, existingVersion={}, newVersion={}",
+            log.info("Received older or same version rule, skipping: ruleId={}, existingVersion={}, newVersion={}",
                     rule.getRuleId(), existingRule.getVersion(), rule.getVersion());
             return;
         }
 
         ruleState.put(rule.getRuleId(), rule);
 
-        LOG.info(
+        log.info(
                 "Rule {} in state: ruleId={}, ruleName={}, ruleType={}, targetActionType={}, "
                         + "windowSize={}ms, threshold={}, version={}",
                 existingRule == null ? "added" : "updated", rule.getRuleId(), rule.getRuleName(), rule.getRuleType(),
@@ -162,7 +161,7 @@ public class DynamicRuleProcessor
 
     /** 记录当前规则状态（调试用） */
     private void logCurrentRuleState(BroadcastState<String, RiskRule> ruleState) throws Exception {
-        if (!LOG.isDebugEnabled()) {
+        if (!log.isDebugEnabled()) {
             return;
         }
 
@@ -176,6 +175,6 @@ public class DynamicRuleProcessor
             count++;
         }
         sb.append("], total: ").append(count);
-        LOG.debug(sb.toString());
+        log.debug(sb.toString());
     }
 }

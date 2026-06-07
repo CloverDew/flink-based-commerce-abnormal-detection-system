@@ -12,8 +12,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.serialization.StringDeserializer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
 import redis.clients.jedis.JedisPoolConfig;
@@ -25,9 +24,8 @@ import redis.clients.jedis.JedisPoolConfig;
  * This is the "feature cache" part of the feedback layer. It stores the {@code extra} JSON (and optionally a few
  * hot fields) keyed by user/session for fast lookups by downstream applications.
  */
+@Slf4j
 public class AlertFeatureCacheConsumer {
-
-    private static final Logger LOG = LoggerFactory.getLogger(AlertFeatureCacheConsumer.class);
 
     public static void main(String[] args) throws Exception {
         Map<String, String> params = parseArgs(args);
@@ -39,7 +37,7 @@ public class AlertFeatureCacheConsumer {
         int redisPort = parseInt(params.getOrDefault("redis-port", "6379"), 6379);
         int ttlSeconds = parseInt(params.getOrDefault("ttl-seconds", "1800"), 1800);
 
-        LOG.info("Starting feature cache consumer: kafka={}, topic={}, groupId={}, redis={}:{} ttl={}s",
+        log.info("Starting feature cache consumer: kafka={}, topic={}, groupId={}, redis={}:{} ttl={}s",
                 bootstrapServers, topic, groupId, redisHost, redisPort, ttlSeconds);
 
         ObjectMapper mapper = new ObjectMapper();
@@ -101,10 +99,10 @@ public class AlertFeatureCacheConsumer {
 
                         cached++;
                         if (cached % 1000 == 0) {
-                            LOG.info("Cached {} alerts into redis", cached);
+                            log.info("Cached {} alerts into redis", cached);
                         }
                     } catch (Exception e) {
-                        LOG.warn("Failed to cache alert record (skipping). err={}", e.getMessage());
+                        log.warn("Failed to cache alert record (skipping). err={}", e.getMessage());
                     }
                 }
             }

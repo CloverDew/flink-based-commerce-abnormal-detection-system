@@ -7,8 +7,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import org.apache.flink.api.common.serialization.DeserializationSchema;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 通用 JSON 反序列化器
@@ -19,10 +18,10 @@ import org.slf4j.LoggerFactory;
  * @param <T>
  *            目标类型
  */
+@Slf4j
 public class JsonDeserializationSchema<T> implements DeserializationSchema<T> {
 
     private static final long serialVersionUID = 1L;
-    private static final Logger LOG = LoggerFactory.getLogger(JsonDeserializationSchema.class);
 
     private final Class<T> targetClass;
     private transient ObjectMapper objectMapper;
@@ -51,7 +50,7 @@ public class JsonDeserializationSchema<T> implements DeserializationSchema<T> {
     @Override
     public T deserialize(byte[] message) throws IOException {
         if (message == null || message.length == 0) {
-            LOG.warn("Received null or empty message, skipping");
+            log.warn("Received null or empty message, skipping");
             return null;
         }
 
@@ -59,13 +58,13 @@ public class JsonDeserializationSchema<T> implements DeserializationSchema<T> {
 
         try {
             T result = objectMapper.readValue(message, targetClass);
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Successfully deserialized message to {}: {}", targetClass.getSimpleName(), result);
+            if (log.isDebugEnabled()) {
+                log.debug("Successfully deserialized message to {}: {}", targetClass.getSimpleName(), result);
             }
             return result;
         } catch (Exception e) {
             String rawMessage = new String(message, StandardCharsets.UTF_8);
-            LOG.error("Failed to deserialize message to {}: [{}], error: {}", targetClass.getSimpleName(),
+            log.error("Failed to deserialize message to {}: [{}], error: {}", targetClass.getSimpleName(),
                     truncateMessage(rawMessage, 200), e.getMessage());
             return null;
         }

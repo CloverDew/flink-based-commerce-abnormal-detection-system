@@ -14,15 +14,13 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Generate rule templates for Kaggle profiles.
  */
+@Slf4j
 public class KaggleRuleTemplateGenerator {
-
-    private static final Logger LOG = LoggerFactory.getLogger(KaggleRuleTemplateGenerator.class);
 
     public static void main(String[] args) throws Exception {
         Map<String, String> params = parseArgs(args);
@@ -48,7 +46,7 @@ public class KaggleRuleTemplateGenerator {
             mapper.writeValue(writer, rules);
         }
 
-        LOG.info("Generated {} rules for profile={} -> {}", rules.size(), profile, output);
+        log.info("Generated {} rules for profile={} -> {}", rules.size(), profile, output);
     }
 
     public static List<RiskRule> buildRules(String profile, int version, long now) {

@@ -24,8 +24,7 @@ import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.test.junit5.MiniClusterExtension;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 异常行为检测系统集成测试
@@ -33,9 +32,8 @@ import org.slf4j.LoggerFactory;
  * <p>
  * 使用 Flink MiniCluster 进行端到端测试，验证： 1. 动态规则加载功能 2. 异常模式检测功能 3. 告警生成功能 4. 边界情况处理
  */
+@Slf4j
 public class AbnormalBehaviorDetectionJobTest {
-
-    private static final Logger LOG = LoggerFactory.getLogger(AbnormalBehaviorDetectionJobTest.class);
 
     @RegisterExtension
     public static final MiniClusterExtension MINI_CLUSTER_EXTENSION = new MiniClusterExtension(
@@ -310,7 +308,7 @@ public class AbnormalBehaviorDetectionJobTest {
 
         @Override
         public void invoke(AlertEvent value, Context context) {
-            LOG.info("CollectSink received: {}", value);
+            log.info("CollectSink received: {}", value);
             VALUES.add(value);
         }
 

@@ -22,6 +22,7 @@
         <log4j.version>2.20.0</log4j.version>
         <junit.version>5.10.0</junit.version>
         <testcontainers.version>1.20.4</testcontainers.version>
+        <lombok.version>1.18.34</lombok.version>
         <spotless.version>2.17.6</spotless.version>
     </properties>
 
@@ -65,6 +66,14 @@
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-clients</artifactId>
             <version>${kafka.version}</version>
+        </dependency>
+
+        <!-- Lombok (compile-time only; not bundled in the shaded jar) -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <version>${lombok.version}</version>
+            <scope>provided</scope>
         </dependency>
 
         <!-- JSON Processing -->
@@ -190,6 +199,13 @@
                 <configuration>
                     <source>${maven.compiler.source}</source>
                     <target>${maven.compiler.target}</target>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                            <version>${lombok.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
                 </configuration>
             </plugin>
 
@@ -210,6 +226,7 @@
                                     <exclude>com.google.code.findbugs:jsr305</exclude>
                                     <exclude>org.slf4j:*</exclude>
                                     <exclude>org.apache.logging.log4j:*</exclude>
+                                    <exclude>org.projectlombok:lombok</exclude>
                                 </excludes>
                             </artifactSet>
                             <filters>

@@ -12,15 +12,13 @@ import java.util.Properties;
 import java.util.concurrent.Future;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Publish JSON or JSONL file contents to Kafka topic.
  */
+@Slf4j
 public class JsonFileKafkaPublisher {
-
-    private static final Logger LOG = LoggerFactory.getLogger(JsonFileKafkaPublisher.class);
 
     public static void main(String[] args) throws Exception {
         Map<String, String> params = parseArgs(args);
@@ -74,7 +72,7 @@ public class JsonFileKafkaPublisher {
             producer.flush();
         }
 
-        LOG.info("Published {} messages to topic={} from file={}", sent, topic, input);
+        log.info("Published {} messages to topic={} from file={}", sent, topic, input);
     }
 
     private static String firstNonBlankLine(String file) throws Exception {

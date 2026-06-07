@@ -18,8 +18,7 @@ import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Convert Kaggle CSV files to project-standard UserBehavior JSON and optionally
@@ -38,9 +37,8 @@ import org.slf4j.LoggerFactory;
  *   --profile auto
  * </pre>
  */
+@Slf4j
 public class KaggleCsvBootstrapTool {
-
-    private static final Logger LOG = LoggerFactory.getLogger(KaggleCsvBootstrapTool.class);
 
     public static void main(String[] args) throws Exception {
         Map<String, String> params = parseArgs(args);
@@ -108,7 +106,7 @@ public class KaggleCsvBootstrapTool {
                 }
 
                 if (converted % 10000 == 0) {
-                    LOG.info("Progress: total={}, converted={}, invalid={}, kafkaSent={}, fileWritten={}", total,
+                    log.info("Progress: total={}, converted={}, invalid={}, kafkaSent={}, fileWritten={}", total,
                             converted, invalid, sentKafka, writtenFile);
                 }
             }
@@ -123,7 +121,7 @@ public class KaggleCsvBootstrapTool {
             }
         }
 
-        LOG.info("Bootstrap finished: total={}, converted={}, invalid={}, kafkaSent={}, fileWritten={}, profile={}",
+        log.info("Bootstrap finished: total={}, converted={}, invalid={}, kafkaSent={}, fileWritten={}, profile={}",
                 total, converted, invalid, sentKafka, writtenFile, profile);
     }
 

@@ -18,8 +18,7 @@ import org.apache.flink.streaming.api.datastream.KeyedStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.util.Collector;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 异常行为模式检测器（CEP/NFA）
@@ -27,9 +26,8 @@ import org.slf4j.LoggerFactory;
  * <p>
  * 负责将业务规则翻译为 Flink CEP 可执行的时序匹配网络（NFA），并将匹配到的事件序列转化为带上下文证据的告警事件。
  */
+@Slf4j
 public class AbnormalPatternDetector {
-
-    private static final Logger LOG = LoggerFactory.getLogger(AbnormalPatternDetector.class);
     private static final long ALLOWED_OUT_OF_ORDERNESS_MS = 5_000L;
 
     private AbnormalPatternDetector() {
@@ -41,9 +39,6 @@ public class AbnormalPatternDetector {
 
         KeyedStream<Tuple2<UserBehavior, RiskRule>, String> keyed = matchedStream.keyBy(keySelector);
 
-        // Use keyed state detectors for paper experiments so that window/threshold can follow dynamic rules.
-        // (CEP patterns with timesOrMore() can postpone emits until window expiry; this makes experiments "no alerts".)
-
         DataStream<AlertEvent> abAlerts = keyed.process(new AbnormalLoginProcess()).name("Stateful Abnormal Login");
         DataStream<AlertEvent> obAlerts = keyed.process(new CountWithinWindowProcess(RiskRule.RuleType.ORDER_BRUSH))
                 .name("Stateful Order Brush");
@@ -52,7 +47,7 @@ public class AbnormalPatternDetector {
         DataStream<AlertEvent> csAlerts = keyed.process(new CredentialStuffingProcess()).name("Stateful Credential Stuffing");
         DataStream<AlertEvent> pfAlerts = keyed.process(new PaymentFraudProcess()).name("Stateful Payment Fraud");
 
-        LOG.info("Stateful detector wired: credentialStuffing + abnormalLogin + orderBrush + highFreqAccess + paymentFraud");
+        log.info("Stateful detector wired: credentialStuffing + abnormalLogin + orderBrush + highFreqAccess + paymentFraud");
         return csAlerts.union(abAlerts).union(obAlerts).union(hfAlerts).union(pfAlerts);
     }
 

@@ -7,8 +7,12 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Objects;
 import java.util.UUID;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.RequiredArgsConstructor;
+import lombok.Setter;
+import lombok.ToString;
 
 /**
  * 告警事件实体类
@@ -16,6 +20,10 @@ import java.util.UUID;
  * <p>
  * 表示检测到异常行为后生成的告警事件，包含触发规则、匹配事件、告警级别等信息。 用于输出到下游系统（如 Kafka、数据库、告警平台等）。
  */
+@Getter
+@Setter
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
+@ToString
 public class AlertEvent implements Serializable {
 
     private static final long serialVersionUID = 1L;
@@ -24,7 +32,8 @@ public class AlertEvent implements Serializable {
             .withZone(ZoneId.systemDefault());
 
     /** 告警唯一标识 */
-    private String alertId;
+    @EqualsAndHashCode.Include
+    private String alertId = UUID.randomUUID().toString();
 
     /** 触发的规则ID */
     private String ruleId;
@@ -33,7 +42,7 @@ public class AlertEvent implements Serializable {
     private RiskRule.RuleType ruleType;
 
     /** 告警级别 */
-    private AlertLevel level;
+    private AlertLevel level = AlertLevel.MEDIUM;
 
     /** 关联的用户ID */
     private String userId;
@@ -51,10 +60,10 @@ public class AlertEvent implements Serializable {
     private int matchCount;
 
     /** 风险评分（用于定量评估与下发决策） */
-    private double riskScore;
+    private double riskScore = 0.0;
 
     /** 告警生成时间戳 */
-    private long alertTimestamp;
+    private long alertTimestamp = System.currentTimeMillis();
 
     /** 第一个触发事件的时间戳 */
     private long firstEventTimestamp;
@@ -76,10 +85,6 @@ public class AlertEvent implements Serializable {
     private String extra;
 
     public AlertEvent() {
-        this.alertId = UUID.randomUUID().toString();
-        this.alertTimestamp = System.currentTimeMillis();
-        this.level = AlertLevel.MEDIUM;
-        this.riskScore = 0.0;
     }
 
     public static AlertEvent fromRuleMatch(RiskRule rule, List<UserBehavior> matchedEvents) {
@@ -137,175 +142,13 @@ public class AlertEvent implements Serializable {
                 rule.getThreshold());
     }
 
-    public String getAlertId() {
-        return alertId;
-    }
-
-    public void setAlertId(String alertId) {
-        this.alertId = alertId;
-    }
-
-    public String getRuleId() {
-        return ruleId;
-    }
-
-    public void setRuleId(String ruleId) {
-        this.ruleId = ruleId;
-    }
-
-    public RiskRule.RuleType getRuleType() {
-        return ruleType;
-    }
-
-    public void setRuleType(RiskRule.RuleType ruleType) {
-        this.ruleType = ruleType;
-    }
-
-    public AlertLevel getLevel() {
-        return level;
-    }
-
-    public void setLevel(AlertLevel level) {
-        this.level = level;
-    }
-
-    public String getUserId() {
-        return userId;
-    }
-
-    public void setUserId(String userId) {
-        this.userId = userId;
-    }
-
-    public String getIp() {
-        return ip;
-    }
-
-    public void setIp(String ip) {
-        this.ip = ip;
-    }
-
-    public String getDeviceId() {
-        return deviceId;
-    }
-
-    public void setDeviceId(String deviceId) {
-        this.deviceId = deviceId;
-    }
-
-    public List<UserBehavior> getTriggerEvents() {
-        return triggerEvents;
-    }
-
-    public void setTriggerEvents(List<UserBehavior> triggerEvents) {
-        this.triggerEvents = triggerEvents;
-    }
-
-    public int getMatchCount() {
-        return matchCount;
-    }
-
-    public void setMatchCount(int matchCount) {
-        this.matchCount = matchCount;
-    }
-
-    public double getRiskScore() {
-        return riskScore;
-    }
-
-    public void setRiskScore(double riskScore) {
-        this.riskScore = riskScore;
-    }
-
-    public long getAlertTimestamp() {
-        return alertTimestamp;
-    }
-
-    public void setAlertTimestamp(long alertTimestamp) {
-        this.alertTimestamp = alertTimestamp;
-    }
-
-    public long getFirstEventTimestamp() {
-        return firstEventTimestamp;
-    }
-
-    public void setFirstEventTimestamp(long firstEventTimestamp) {
-        this.firstEventTimestamp = firstEventTimestamp;
-    }
-
-    public long getLastEventTimestamp() {
-        return lastEventTimestamp;
-    }
-
-    public void setLastEventTimestamp(long lastEventTimestamp) {
-        this.lastEventTimestamp = lastEventTimestamp;
-    }
-
-    public long getProcessingLagMs() {
-        return processingLagMs;
-    }
-
-    public void setProcessingLagMs(long processingLagMs) {
-        this.processingLagMs = processingLagMs;
-    }
-
-    public String getMessage() {
-        return message;
-    }
-
-    public void setMessage(String message) {
-        this.message = message;
-    }
-
-    public String getExtra() {
-        return extra;
-    }
-
-    public void setExtra(String extra) {
-        this.extra = extra;
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o)
-            return true;
-        if (o == null || getClass() != o.getClass())
-            return false;
-        AlertEvent that = (AlertEvent) o;
-        return Objects.equals(alertId, that.alertId);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(alertId);
-    }
-
-    @Override
-    public String toString() {
-        return "AlertEvent{" + "alertId='" + alertId + '\'' + ", ruleId='" + ruleId + '\'' + ", ruleType=" + ruleType
-                + ", level=" + level + ", userId='" + userId + '\'' + ", ip='" + ip + '\'' + ", matchCount="
-                + matchCount + ", riskScore=" + riskScore + ", alertTimestamp="
-                + FORMATTER.format(Instant.ofEpochMilli(alertTimestamp)) + ", message='" + message + '\'' + '}';
-    }
-
     /** 告警级别枚举 */
+    @Getter
+    @RequiredArgsConstructor
     public enum AlertLevel {
         LOW(1, "低"), MEDIUM(2, "中"), HIGH(3, "高"), CRITICAL(4, "严重");
 
         private final int value;
         private final String description;
-
-        AlertLevel(int value, String description) {
-            this.value = value;
-            this.description = description;
-        }
-
-        public int getValue() {
-            return value;
-        }
-
-        public String getDescription() {
-            return description;
-        }
     }
 }
