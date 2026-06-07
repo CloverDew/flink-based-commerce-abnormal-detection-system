@@ -1,4 +1,4 @@
-# 电商异常用户行为实时检测系统！！保姆级！！运行指南
+# 电商异常用户行为实时检测系统运行指南
 
 基于 Apache Flink 的实时风控检测系统，用于识别电商平台中的异常用户行为，如撞库攻击、刷单、异常登录等。
 
@@ -197,8 +197,6 @@ riskScore = severityWeight × (1 + matchCount/threshold + min(1.5, densityPerSec
 - `TransactionDT -> timestamp`
 
 #### 数据划分说明
-
-Kaggle 通路**不做传统监督学习意义上的 train/test 切分**，而是：
 
 1. **按行数截断**：`bootstrap.conf` 中 `MAX_ROWS`（`-1` 表示全量）控制导入规模
 2. **按 Profile 映射**：`multi_category` / `clickstream` / `ieee_cis` 三套字段映射与规则模板，同一 CSV 可选用不同 profile 解释
@@ -464,7 +462,7 @@ flink run -c cn.edu.ustb.detection.AbnormalBehaviorDetectionJob \
 | :----------------------------------------------------------- | :---------- | :---- | :--------- | :------- |
 | [cloverdew/flink-commerce-abnormal-detection](https://hub.docker.com/repository/docker/cloverdew/flink-commerce-abnormal-detection) | 24 days ago | image | Public     | Inactive |
 
-### 1) 如果想使用本人构建镜像，请拉取
+### 1) 如果想使用本人构建的镜像，请拉取
 
 ```bash
 docker pull cloverdew/flink-commerce-abnormal-detection:latest
@@ -521,7 +519,7 @@ docker compose run --rm --entrypoint /bin/bash tools \
   -lc "/opt/app/scripts/run-e2e.sh"
 ```
 
-### 懒人 or 零技术人士执行步骤如下：
+### 懒人执行步骤：
 
 ```bash
 # 0. 先把 Kaggle CSV 放到 ./data/kaggle-events.csv
@@ -603,7 +601,7 @@ docker compose run --rm --entrypoint /bin/bash \
 | kafka.sink.enabled | false | 是否启用 Kafka 告警输出 |
 | parallelism | CPU核心数 | 任务并行度 |
 
-## 项目结构（保姆级解说）
+## 项目结构
 
 ```
 src/
