@@ -74,103 +74,13 @@ RULE_METRIC_FIELDNAMES = [
     "recall",
     "f1",
 ]
-LOGIN_FIXED_BUCKETS = (
-    {"bucket": "fast_pos", "ratio": 0.35, "gap_ms": 18_000, "expected_positive": True, "bucket_kind": "positive"},
-    {"bucket": "mid_pos", "ratio": 0.25, "gap_ms": 45_000, "expected_positive": True, "bucket_kind": "positive"},
-    {"bucket": "slow_pos", "ratio": 0.20, "gap_ms": 180_000, "expected_positive": True, "bucket_kind": "positive"},
-    {"bucket": "hard_neg", "ratio": 0.12, "gap_ms": 50_000, "expected_positive": False, "bucket_kind": "hard_negative"},
-    {
-        "bucket": "late_neg",
-        "ratio": 0.08,
-        "gap_ms": 330_000,
-        "expected_positive": False,
-        "bucket_kind": "window_edge_negative",
-    },
-)
-REPEATED_FIXED_BUCKETS = {
-    "ORDER_BRUSH": {
-        "action_type": "ORDER",
-        "events_per_user": 5,
-        "buckets": (
-            {
-                "bucket": "fast_pos",
-                "ratio": 0.35,
-                "spacing_ms": 4_000,
-                "expected_positive": True,
-                "bucket_kind": "positive",
-            },
-            {
-                "bucket": "mid_pos",
-                "ratio": 0.25,
-                "spacing_ms": 12_000,
-                "expected_positive": True,
-                "bucket_kind": "positive",
-            },
-            {
-                "bucket": "slow_pos",
-                "ratio": 0.20,
-                "spacing_ms": 70_000,
-                "expected_positive": True,
-                "bucket_kind": "positive",
-            },
-            {
-                "bucket": "hard_neg",
-                "ratio": 0.12,
-                "spacing_ms": 14_000,
-                "expected_positive": False,
-                "bucket_kind": "hard_negative",
-            },
-            {
-                "bucket": "late_neg",
-                "ratio": 0.08,
-                "spacing_ms": 90_000,
-                "expected_positive": False,
-                "bucket_kind": "window_edge_negative",
-            },
-        ),
-    },
-    "HIGH_FREQ_ACCESS": {
-        "action_type": "VIEW",
-        "events_per_user": 100,
-        "buckets": (
-            {
-                "bucket": "fast_pos",
-                "ratio": 0.35,
-                "spacing_ms": 250,
-                "expected_positive": True,
-                "bucket_kind": "positive",
-            },
-            {
-                "bucket": "mid_pos",
-                "ratio": 0.25,
-                "spacing_ms": 450,
-                "expected_positive": True,
-                "bucket_kind": "positive",
-            },
-            {
-                "bucket": "slow_pos",
-                "ratio": 0.20,
-                "spacing_ms": 2_500,
-                "expected_positive": True,
-                "bucket_kind": "positive",
-            },
-            {
-                "bucket": "hard_neg",
-                "ratio": 0.12,
-                "spacing_ms": 500,
-                "expected_positive": False,
-                "bucket_kind": "hard_negative",
-            },
-            {
-                "bucket": "late_neg",
-                "ratio": 0.08,
-                "spacing_ms": 3_800,
-                "expected_positive": False,
-                "bucket_kind": "window_edge_negative",
-            },
-        ),
-    },
-}
+def window_adaptive_timings(window_ms: int) -> dict[str, int]:
+    """Burst timings scaled to the rule window so positives reliably trigger in Flink."""
+    return {
+        "intra_login_gap": min(8_000, max(800, window_ms // 8)),
+        "order_spacing": min(3_500, max(120, window_ms // 25)),
+        "view_spacing": min(800, max(15, window_ms // 200)),
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -433,33 +343,6 @@ def dedupe_alerts_by_rule_and_user(alerts: list[dict[str, object]], *, window_ms
     return list(best.values())
 
 
-def allocate_counts(total: int, ratios: list[float]) -> list[int]:
-    if total <= 0 or not ratios:
-        return [0 for _ in ratios]
-    scaled = [max(0.0, ratio) * total for ratio in ratios]
-    counts = [int(value) for value in scaled]
-    remainder = total - sum(counts)
-    order = sorted(range(len(ratios)), key=lambda idx: scaled[idx] - counts[idx], reverse=True)
-    for idx in order[:remainder]:
-        counts[idx] += 1
-    return counts
-
-
-def background_event(action_type: str, user_id: str, timestamp: int, *, idx: int) -> dict[str, object]:
-    event: dict[str, object] = {
-        "userId": user_id,
-        "actionType": action_type,
-        "ip": f"172.16.{idx % 16}.{idx % 250 + 1}",
-        "timestamp": timestamp,
-        "sessionId": f"bg-{idx}",
-    }
-    if action_type in {"VIEW", "ORDER", "CART"}:
-        event["productId"] = f"bgp-{idx % 1000}"
-    if action_type == "ORDER":
-        event["amount"] = round(15 + (idx % 80) * 2.25, 2)
-    return event
-
-
 def compute_case_quality_metrics(
     case_name: str,
     scoped_alerts: list[dict[str, object]],
@@ -541,156 +424,73 @@ def generate_rules_and_events(case_dir: Path, *, case_name: str, window_ms: int,
     rules = case_rule_payloads(case_name, window_ms, version)
     rules_path = case_dir / "rules.json"
     rules_path.write_text(json.dumps(rules, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    timings = window_adaptive_timings(window_ms)
+    per_user_events = 107
+    group_n = max(1, min(event_count // per_user_events, 8000))
+    token = topic_token(case_name)
     events: list[dict[str, object]] = []
     expected_users_by_rule_type: dict[str, set[str]] = {rule_type: set() for rule_type in RULE_LABELS}
-    negative_users_by_rule_type: dict[str, set[str]] = {rule_type: set() for rule_type in RULE_LABELS}
-    per_pattern_user_budget = 107
-    group_n = max(1, min(event_count // per_pattern_user_budget, 8000))
-    background_count = max(0, event_count - group_n * per_pattern_user_budget)
-    token = topic_token(case_name)
-    user_seq = {rule_type: 0 for rule_type in RULE_LABELS}
-    bucket_summary: dict[str, list[dict[str, object]]] = {rule_type: [] for rule_type in RULE_LABELS}
+
+    for idx in range(group_n):
+        user_id = f"al_u_{token}_{window_ms}_{idx}"
+        ts = idx * 30
+        events.append(
+            {
+                "userId": user_id,
+                "actionType": "LOGIN",
+                "ip": f"10.0.0.{idx % 250 + 1}",
+                "timestamp": ts,
+                "sessionId": f"als-{idx}",
+            }
+        )
+        events.append(
+            {
+                "userId": user_id,
+                "actionType": "CHANGE_PASSWORD",
+                "ip": f"10.0.1.{idx % 250 + 1}",
+                "timestamp": ts + timings["intra_login_gap"],
+                "sessionId": f"als-{idx}",
+            }
+        )
+        expected_users_by_rule_type["ABNORMAL_LOGIN"].add(user_id)
+
+    for idx in range(group_n):
+        user_id = f"ob_u_{token}_{window_ms}_{idx}"
+        base = 120_000 + idx * 65
+        for event_idx in range(5):
+            events.append(
+                {
+                    "userId": user_id,
+                    "actionType": "ORDER",
+                    "ip": f"10.1.0.{idx % 250 + 1}",
+                    "timestamp": base + event_idx * timings["order_spacing"],
+                    "sessionId": f"obs-{idx}",
+                    "productId": f"p{event_idx}",
+                    "amount": 99.9 + event_idx,
+                }
+            )
+        expected_users_by_rule_type["ORDER_BRUSH"].add(user_id)
+
+    for idx in range(group_n):
+        user_id = f"hf_u_{token}_{window_ms}_{idx}"
+        base = 360_000 + idx * 85
+        for event_idx in range(100):
+            events.append(
+                {
+                    "userId": user_id,
+                    "actionType": "VIEW",
+                    "ip": f"10.2.0.{idx % 250 + 1}",
+                    "timestamp": base + event_idx * timings["view_spacing"],
+                    "sessionId": f"hfs-{idx}",
+                    "productId": f"pv{event_idx % 20}",
+                }
+            )
+        expected_users_by_rule_type["HIGH_FREQ_ACCESS"].add(user_id)
+
     max_offset = 0
-    phases = {
-        "ABNORMAL_LOGIN": 0,
-        "ORDER_BRUSH": 120_000,
-        "HIGH_FREQ_ACCESS": 360_000,
-        "BACKGROUND": 780_000,
-    }
-    staggers = {
-        "ABNORMAL_LOGIN": 45,
-        "ORDER_BRUSH": 65,
-        "HIGH_FREQ_ACCESS": 85,
-        "BACKGROUND": 30,
-    }
-
-    def append_login_bucket(
-        bucket_name: str,
-        count: int,
-        gap_ms: int,
-        *,
-        expected_positive: bool,
-        bucket_kind: str,
-    ) -> None:
-        nonlocal max_offset
-        bucket_summary["ABNORMAL_LOGIN"].append(
-            {
-                "bucket": bucket_name,
-                "bucket_kind": bucket_kind,
-                "count": count,
-                "gap_ms": gap_ms,
-                "expected_positive": expected_positive,
-            }
-        )
-        for _ in range(count):
-            idx = user_seq["ABNORMAL_LOGIN"]
-            user_seq["ABNORMAL_LOGIN"] += 1
-            user_id = f"al_{'pos' if expected_positive else 'neg'}_{token}_{bucket_name}_{idx}"
-            base = phases["ABNORMAL_LOGIN"] + idx * staggers["ABNORMAL_LOGIN"]
-            events.append(
-                {
-                    "userId": user_id,
-                    "actionType": "LOGIN",
-                    "ip": f"10.0.0.{idx % 250 + 1}",
-                    "timestamp": base,
-                    "sessionId": f"als-{idx}",
-                }
-            )
-            events.append(
-                {
-                    "userId": user_id,
-                    "actionType": "CHANGE_PASSWORD",
-                    "ip": f"10.0.1.{idx % 250 + 1}",
-                    "timestamp": base + gap_ms,
-                    "sessionId": f"als-{idx}",
-                }
-            )
-            if expected_positive:
-                expected_users_by_rule_type["ABNORMAL_LOGIN"].add(user_id)
-            else:
-                negative_users_by_rule_type["ABNORMAL_LOGIN"].add(user_id)
-            max_offset = max(max_offset, base + gap_ms)
-
-    def append_repeated_bucket(
-        rule_type: str,
-        bucket_name: str,
-        count: int,
-        action_type: str,
-        per_user_events: int,
-        spacing_ms: int,
-        expected_positive: bool,
-        bucket_kind: str,
-    ) -> None:
-        nonlocal max_offset
-        prefix = "ob" if rule_type == "ORDER_BRUSH" else "hf"
-        ip_prefix = "10.1.0" if rule_type == "ORDER_BRUSH" else "10.2.0"
-        session_prefix = "obs" if rule_type == "ORDER_BRUSH" else "hfs"
-        product_prefix = "p" if rule_type == "ORDER_BRUSH" else "pv"
-        bucket_summary[rule_type].append(
-            {
-                "bucket": bucket_name,
-                "bucket_kind": bucket_kind,
-                "count": count,
-                "spacing_ms": spacing_ms,
-                "events_per_user": per_user_events,
-                "expected_positive": expected_positive,
-            }
-        )
-        for _ in range(count):
-            idx = user_seq[rule_type]
-            user_seq[rule_type] += 1
-            user_id = f"{prefix}_{'pos' if expected_positive else 'neg'}_{token}_{bucket_name}_{idx}"
-            base = phases[rule_type] + idx * staggers[rule_type]
-            for event_idx in range(per_user_events):
-                event = {
-                    "userId": user_id,
-                    "actionType": action_type,
-                    "ip": f"{ip_prefix}.{idx % 250 + 1}",
-                    "timestamp": base + event_idx * spacing_ms,
-                    "sessionId": f"{session_prefix}-{idx}",
-                    "productId": f"{product_prefix}{event_idx % 20}",
-                }
-                if action_type == "ORDER":
-                    event["amount"] = 99.9 + event_idx
-                events.append(event)
-            if expected_positive:
-                expected_users_by_rule_type[rule_type].add(user_id)
-            else:
-                negative_users_by_rule_type[rule_type].add(user_id)
-            max_offset = max(max_offset, base + (per_user_events - 1) * spacing_ms)
-
-    login_counts = allocate_counts(group_n, [bucket["ratio"] for bucket in LOGIN_FIXED_BUCKETS])
-    for bucket_cfg, count in zip(LOGIN_FIXED_BUCKETS, login_counts):
-        append_login_bucket(
-            str(bucket_cfg["bucket"]),
-            count,
-            gap_ms=int(bucket_cfg["gap_ms"]),
-            expected_positive=bool(bucket_cfg["expected_positive"]),
-            bucket_kind=str(bucket_cfg["bucket_kind"]),
-        )
-
-    for rule_type, config in REPEATED_FIXED_BUCKETS.items():
-        bucket_counts = allocate_counts(group_n, [bucket["ratio"] for bucket in config["buckets"]])
-        for bucket_cfg, count in zip(config["buckets"], bucket_counts):
-            append_repeated_bucket(
-                rule_type,
-                str(bucket_cfg["bucket"]),
-                count,
-                str(config["action_type"]),
-                int(config["events_per_user"]),
-                int(bucket_cfg["spacing_ms"]),
-                bool(bucket_cfg["expected_positive"]),
-                str(bucket_cfg["bucket_kind"]),
-            )
-
-    background_actions = ["SEARCH", "CLICK", "VIEW", "ORDER", "CART"]
-    for idx in range(background_count):
-        action_type = background_actions[idx % len(background_actions)]
-        user_id = f"bg_{token}_{idx}"
-        timestamp = phases["BACKGROUND"] + idx * staggers["BACKGROUND"]
-        events.append(background_event(action_type, user_id, timestamp, idx=idx))
-        max_offset = max(max_offset, timestamp)
-
+    if events:
+        max_offset = max(int(event["timestamp"]) for event in events)
     start_ts = int(time.time() * 1000) - max_offset - 30_000
     for event in events:
         event["timestamp"] = int(event["timestamp"]) + start_ts
@@ -710,14 +510,13 @@ def generate_rules_and_events(case_dir: Path, *, case_name: str, window_ms: int,
             "classificationLabel": CLASSIFICATION_LABEL,
             "disclaimer": CLASSIFICATION_DISCLAIMER,
             "windowMs": window_ms,
-            "fixedTimingTiers": True,
+            "paperProfile": True,
+            "windowAdaptiveTimings": timings,
             "requestedEvents": event_count,
             "actualEvents": len(events),
             "cohortUsersPerPattern": group_n,
-            "backgroundEvents": background_count,
             "positiveUsersByRuleType": {rule_type: len(users) for rule_type, users in expected_users_by_rule_type.items()},
-            "negativeUsersByRuleType": {rule_type: len(users) for rule_type, users in negative_users_by_rule_type.items()},
-            "patterns": bucket_summary,
+            "patterns": list(RULE_LABELS.keys()),
         },
         "expected_users_by_rule_type": expected_users_by_rule_type,
     }
@@ -830,7 +629,7 @@ def capture_alerts(
     out_file = case_dir / f"alerts-{case_name}.jsonl"
     group_id = f"exp-capture-{topic_token(case_name)}-{int(time.time() * 1000)}"
     # Higher parallelism runs need longer drain time before the consumer times out.
-    consumer_timeout_ms = min(90_000, 28_000 + max(1, parallelism) * 8_000)
+    consumer_timeout_ms = min(180_000, 40_000 + max(1, parallelism) * 15_000)
     p = subprocess.run(
         [
             "docker",
@@ -1080,6 +879,18 @@ def main() -> None:
     plt.ylabel("throughput(events/s)")
     plt.tight_layout()
     plt.savefig(layout.root / "scalability_throughput.png", dpi=160)
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "samples" / "backfill_experiment_metrics.py"),
+            "--input-dir",
+            str(layout.root),
+        ],
+        cwd=str(ROOT),
+        check=False,
+        timeout=60,
+    )
 
     if not args.skip_figures:
         subprocess.run(

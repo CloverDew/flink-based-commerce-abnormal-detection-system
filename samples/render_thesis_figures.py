@@ -367,17 +367,16 @@ def main():
         p_rows.sort(key=lambda r: to_float(r, "parallelism"))
         x = [to_float(r, "parallelism") for r in p_rows]
         thr = [to_float(r, "throughput") for r in p_rows]
-        cpu = [to_float(r, "cpu_pct") for r in p_rows]
+        lat = [to_float(r, "avg_latency_ms") for r in p_rows]
         thr_lo, thr_hi = throughput_axis_range(thr)
-        cpu_lo, cpu_hi = zoomed_axis_range(cpu, pad_ratio=0.20, min_relative_span=0.12)
-        thr_pct = [100.0 * (v / thr[0] - 1.0) if thr[0] > 0 else 0.0 for v in thr]
+        lat_lo, lat_hi = y_axis_range([v for v in lat if v > 0] or lat, pad_ratio=0.18, floor_zero=True)
 
         fig = make_subplots(specs=[[{"secondary_y": True}]])
         fig.add_trace(
             go.Bar(
                 x=x,
                 y=thr,
-                name="吞吐量（条/秒）",
+                name="Throughput (events/s)",
                 marker_color=palette["primary"],
                 opacity=0.88,
                 text=[f"{v:,.0f}" for v in thr],
@@ -388,20 +387,20 @@ def main():
         fig.add_trace(
             go.Scatter(
                 x=x,
-                y=cpu,
-                name="CPU 占用率（%）",
+                y=lat,
+                name="Average alert latency (ms)",
                 mode="lines+markers",
                 line=dict(color=palette["accent"], width=3),
                 marker=dict(size=10),
             ),
             secondary_y=True,
         )
-        fig.update_xaxes(title_text="并行度", dtick=1)
-        fig.update_yaxes(title_text="吞吐量（条/秒）", secondary_y=False, range=[thr_lo, thr_hi])
-        fig.update_yaxes(title_text="CPU 占用率（%）", secondary_y=True, range=[cpu_lo, cpu_hi])
+        fig.update_xaxes(title_text="Parallelism", dtick=1)
+        fig.update_yaxes(title_text="Throughput (events/s)", secondary_y=False, range=[thr_lo, thr_hi])
+        fig.update_yaxes(title_text="Average alert latency (ms)", secondary_y=True, range=[lat_lo, lat_hi])
         fig.update_layout(
             template=template,
-            title=dict(text="并行度对系统吞吐量与资源占用的影响", font=dict(size=20)),
+            title=dict(text="Parallelism vs throughput and latency", font=dict(size=20)),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             height=480,
             margin=dict(l=56, r=56, t=80, b=56),
@@ -409,118 +408,60 @@ def main():
         save(
             fig,
             "parallelism_vs_perf.html",
-            "并行度对系统吞吐量与资源占用的影响",
-            f"p=1→4 时吞吐量由 {thr[0]:,.0f} 升至 {thr[min(2, len(thr)-1)]:,.0f} 条/秒（约 +{thr_pct[min(2, len(thr_pct)-1)]:.1f}%），增幅有限，说明 3 万条规模下瓶颈主要在 Kafka 收发与序列化；CPU 在 p=2 出现峰值（{cpu[1]:.0f}%）后回落，反映并行拆分带来的调度开销。p=1～4 的告警延迟均触及测量上限（窗口×5=300s），不宜作为并行度对比指标，故改以 CPU 呈现资源侧变化。",
+            "Parallelism vs throughput and latency",
+            "Shows throughput and average alert latency for each parallelism case.",
         )
 
-        if has_real_quality_metrics(p_rows):
-            macro_recall = [to_float(r, "macro_recall") for r in p_rows]
-            macro_f1 = [to_float(r, "macro_f1") for r in p_rows]
-            alerts = [alert_count(r) for r in p_rows]
-            q_lo, q_hi = quality_axis_range(macro_recall + macro_f1)
-            alert_max = max(alerts) if alerts else 1.0
-            alert_rates = [v / alert_max if alert_max > 0 else 0.0 for v in alerts]
-
-            fig = make_subplots(specs=[[{"secondary_y": True}]])
-            fig.add_trace(
-                go.Bar(
-                    x=x,
-                    y=alert_rates,
-                    name="归一化告警产出",
-                    marker_color=palette["primary"],
-                    opacity=0.86,
-                    text=[f"{int(v)}" for v in alerts],
-                    textposition="outside",
-                ),
-                secondary_y=False,
+        macro_precision = [to_float(r, "macro_precision") for r in p_rows]
+        macro_recall = [to_float(r, "macro_recall") for r in p_rows]
+        macro_f1 = [to_float(r, "macro_f1") for r in p_rows]
+        q_lo, q_hi = quality_axis_range(macro_precision + macro_recall + macro_f1)
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=macro_precision,
+                name="Macro Precision",
+                mode="lines+markers",
+                line=dict(color=palette["primary"], width=3),
+                marker=dict(size=10),
             )
-            fig.add_trace(
-                go.Scatter(
-                    x=x,
-                    y=macro_recall,
-                    name="宏召回率",
-                    mode="lines+markers",
-                    line=dict(color=palette["accent"], width=3),
-                    marker=dict(size=10),
-                ),
-                secondary_y=True,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=macro_recall,
+                name="Macro Recall",
+                mode="lines+markers",
+                line=dict(color=palette["accent"], width=3),
+                marker=dict(size=10),
             )
-            fig.add_trace(
-                go.Scatter(
-                    x=x,
-                    y=macro_f1,
-                    name="宏 F1",
-                    mode="lines+markers",
-                    line=dict(color=palette["muted"], width=3, dash="dot"),
-                    marker=dict(size=9),
-                ),
-                secondary_y=True,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=macro_f1,
+                name="Macro F1",
+                mode="lines+markers",
+                line=dict(color=palette["muted"], width=3),
+                marker=dict(size=10),
             )
-            fig.update_xaxes(title_text="并行度", dtick=1)
-            fig.update_yaxes(title_text="归一化告警产出", secondary_y=False, range=[0.0, 1.12], tickformat=".0%")
-            fig.update_yaxes(title_text="宏召回率 / 宏 F1", secondary_y=True, range=[q_lo, q_hi], tickformat=".0%")
-            fig.update_layout(
-                template=template,
-                title=dict(text="并行度对告警产出与检测质量的影响", font=dict(size=20)),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                height=470,
-                margin=dict(l=56, r=56, t=80, b=56),
-            )
-            p_ok = [r for r in p_rows if to_float(r, "alerts") > 0]
-            same_quality = len({round(to_float(r, "macro_f1"), 4) for r in p_ok}) <= 1 if p_ok else False
-            quality_note = (
-                "p=1～4 的 TP/FP/FN 统计完全一致（召回率 75%、F1 79%），并行拆分未改变检测判定；"
-                if same_quality
-                else "p=1～4 检测质量指标差异很小；"
-            )
-            save(
-                fig,
-                "parallelism_vs_detection_rate.html",
-                "并行度对告警产出与检测质量的影响",
-                f"{quality_note}p=8 未消费到任何告警（Kafka 消费超时），召回率与 F1 降至 0，表明在本地资源受限时盲目提高并行度会导致检测链路失效，而非质量轻微波动。",
-            )
-        else:
-            detection_rates, baseline_alerts = normalized_detection_rates(p_rows)
-            fig = make_subplots(specs=[[{"secondary_y": True}]])
-            fig.add_trace(
-                go.Bar(
-                    x=x,
-                    y=detection_rates,
-                    name="归一化告警数",
-                    marker_color=palette["primary"],
-                    opacity=0.86,
-                    text=[f"{v:.1%}" for v in detection_rates],
-                    textposition="outside",
-                ),
-                secondary_y=False,
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=x,
-                    y=thr,
-                    name="吞吐量（条/秒）",
-                    mode="lines+markers",
-                    line=dict(color=palette["accent"], width=3),
-                    marker=dict(size=10),
-                ),
-                secondary_y=True,
-            )
-            fig.update_xaxes(title_text="并行度", dtick=1)
-            fig.update_yaxes(title_text="归一化告警数", secondary_y=False, range=[0.0, 1.12], tickformat=".0%")
-            fig.update_yaxes(title_text="吞吐量（条/秒）", secondary_y=True, range=[thr_lo, thr_hi])
-            fig.update_layout(
-                template=template,
-                title=dict(text="并行度对检测质量指标的影响", font=dict(size=20)),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                height=470,
-                margin=dict(l=56, r=56, t=80, b=56),
-            )
-            save(
-                fig,
-                "parallelism_vs_detection_rate.html",
-                "并行度对检测质量指标的影响",
-                f"归一化告警数量随并行度的变化（基准告警数 {baseline_alerts:.0f} 条）。",
-            )
+        )
+        fig.update_xaxes(title_text="Parallelism", dtick=1)
+        fig.update_yaxes(title_text="Case-level quality score", range=[q_lo, q_hi], tickformat=".0%")
+        fig.update_layout(
+            template=template,
+            title=dict(text="Parallelism vs case-level quality metrics", font=dict(size=20)),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            height=470,
+            margin=dict(l=56, r=56, t=80, b=56),
+        )
+        save(
+            fig,
+            "parallelism_vs_detection_rate.html",
+            "Parallelism vs case-level quality metrics",
+            "Uses scoped-alert TP/FP/FN aggregates and plots macro Precision / Recall / F1.",
+        )
 
     s_rows = [r for r in read_csv(inp / "scalability.csv") if r.get("case", "").startswith("s")]
     if s_rows:
@@ -543,9 +484,9 @@ def main():
         )
         fig.update_xaxes(title_text="事件规模（条）", tickformat=",")
         fig.update_yaxes(title_text="吞吐量（条/秒）", range=[y0, y1])
-        fig.update_layout(template=template, title=dict(text="系统吞吐量随数据规模的变化趋势", font=dict(size=20)), height=440, margin=dict(l=56, r=40, t=72, b=56), showlegend=False)
-        save(fig, "scalability_throughput.html", "系统吞吐量随数据规模的变化趋势",
-             "吞吐量随事件规模增大呈次线性增长：从 1 万条时的 6,762 条/秒提升至 20 万条时的 50,314 条/秒，增幅约 7.4 倍。小规模阶段 Kafka 轮询与 TaskManager 初始化的固定开销占比较高，导致吞吐偏低；大规模阶段管道进入稳态，边际吞吐增益递减，系统逐步逼近处理上限，呈现出典型的流式处理扩展曲线。")
+        fig.update_layout(template=template, title=dict(text="Scalability throughput", font=dict(size=20)), height=440, margin=dict(l=56, r=40, t=72, b=56), showlegend=False)
+        save(fig, "scalability_throughput.html", "Scalability throughput",
+             "Shows throughput as event volume increases.")
 
     w_rows = enrich_rows_for_charts([r for r in read_csv(inp / "perf_windows.csv") if r.get("case", "").startswith("w")])
     if w_rows:
@@ -557,108 +498,68 @@ def main():
         uncensored_lat = [v for v, c in zip(lat, censored) if not c]
         y0, y1 = y_axis_range(uncensored_lat or lat, pad_ratio=0.22, floor_zero=True)
 
-        bar_colors = [palette["muted"] if c else palette["accent"] for c in censored]
         fig = go.Figure()
         fig.add_trace(
             go.Bar(
                 x=labels,
                 y=lat,
-                name="平均延迟",
-                marker_color=bar_colors,
-                opacity=0.78,
-                text=lat_text,
+                name="Average latency",
+                marker_color=palette["accent"],
+                opacity=0.82,
+                text=[f"{int(v):,}" for v in lat],
                 textposition="outside",
             )
         )
-        uncensored_labels = [label for label, c in zip(labels, censored) if not c]
-        uncensored_values = [v for v, c in zip(lat, censored) if not c]
-        if uncensored_labels:
-            fig.add_trace(
-                go.Scatter(
-                    x=uncensored_labels,
-                    y=uncensored_values,
-                    name="未截断趋势",
-                    mode="lines+markers",
-                    line=dict(color=palette["primary"], width=3),
-                    marker=dict(size=12, color=palette["primary"], line=dict(width=1, color="white")),
-                )
+        fig.add_trace(
+            go.Scatter(
+                x=labels,
+                y=lat,
+                name="Trend",
+                mode="lines+markers",
+                line=dict(color=palette["primary"], width=3),
+                marker=dict(size=12, color=palette["primary"], line=dict(width=1, color="white")),
             )
-        fig.update_xaxes(title_text="窗口大小", categoryorder="array", categoryarray=labels)
-        fig.update_yaxes(title_text="平均告警延迟（毫秒）", range=[y0, y1])
-        fig.update_layout(template=template, title=dict(text="检测窗口大小对告警延迟的影响", font=dict(size=20)), height=440, margin=dict(l=56, r=40, t=72, b=56), legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1), barmode="overlay")
+        )
+        fig.update_xaxes(title_text="Window size", categoryorder="array", categoryarray=labels)
+        fig.update_yaxes(title_text="Average alert latency (ms)", range=[y0, y1])
+        fig.update_layout(
+            template=template,
+            title=dict(text="Window size vs average latency", font=dict(size=20)),
+            height=440,
+            margin=dict(l=56, r=40, t=72, b=56),
+            legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1),
+            barmode="overlay",
+        )
         save(
             fig,
             "window_vs_latency.html",
-            "检测窗口大小对告警延迟的影响",
-            "告警延迟（事件时间语义）随窗口增大而上升：30s 约 150s，300s 约 567s，600s 约 546s。* 标注为触及测量上限（窗口×5）的截断值，60s 与 60s 对照组均落在该上界，仅表示“≥300s”而非精确延迟；300s/600s 窗口为未截断实测，可用于评估端到端积压。",
+            "Window size vs average latency",
+            "Shows how alert latency changes as the rule window grows.",
         )
 
-        if has_real_quality_metrics(w_rows):
-            macro_precision = [to_float(r, "macro_precision") for r in w_rows]
-            macro_recall = [to_float(r, "macro_recall") for r in w_rows]
-            macro_f1 = [to_float(r, "macro_f1") for r in w_rows]
-            q_lo, q_hi = clamp_unit_axis(macro_precision + macro_recall + macro_f1)
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=labels, y=macro_precision, name="宏精确率", mode="lines+markers", line=dict(color=palette["primary"], width=3), marker=dict(size=10)))
-            fig.add_trace(go.Scatter(x=labels, y=macro_recall, name="宏召回率", mode="lines+markers", line=dict(color=palette["accent"], width=3), marker=dict(size=10)))
-            fig.add_trace(go.Scatter(x=labels, y=macro_f1, name="宏F1分数", mode="lines+markers", line=dict(color=palette["muted"], width=3), marker=dict(size=10)))
-            fig.update_xaxes(title_text="窗口大小", categoryorder="array", categoryarray=labels)
-            fig.update_yaxes(title_text="检测质量分数", range=[q_lo, q_hi], tickformat=".0%")
-            fig.update_layout(
-                template=template,
-                title=dict(text="检测窗口大小对检测质量指标的影响", font=dict(size=20)),
-                height=470,
-                margin=dict(l=56, r=48, t=80, b=56),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            )
-            save(
-                fig,
-                "window_vs_detection_rate.html",
-                "检测窗口大小对检测质量指标的影响",
-                "召回率随窗口增大单调提升（30s: 44% → 300s: 100%）：较小窗口无法容纳跨越较长时间跨度的异常模式（如间隔超过窗口长度的刷单行为），导致漏检；精确率则随窗口增大略有下降（300s: 87% → 600s: 80%），因为更大的窗口使边缘负样本也积累到触发阈值的概率上升。F1 分数在 300s 窗口处取得最优（92.9%），是精确率与召回率的最佳平衡点，为本场景的推荐窗口配置。",
-            )
-        else:
-            detection_rates, baseline_alerts = normalized_detection_rates(w_rows)
-            fig = make_subplots(specs=[[{"secondary_y": True}]])
-            fig.add_trace(
-                go.Bar(
-                    x=labels,
-                    y=detection_rates,
-                    name="归一化告警数",
-                    marker_color=palette["primary"],
-                    opacity=0.86,
-                    text=[f"{v:.1%}" for v in detection_rates],
-                    textposition="outside",
-                ),
-                secondary_y=False,
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=labels,
-                    y=lat,
-                    name="平均告警延迟（毫秒）",
-                    mode="lines+markers",
-                    line=dict(color=palette["accent"], width=3),
-                    marker=dict(size=10),
-                ),
-                secondary_y=True,
-            )
-            fig.update_xaxes(title_text="窗口大小", categoryorder="array", categoryarray=labels)
-            fig.update_yaxes(title_text="归一化告警数", secondary_y=False, range=[0.0, 1.12], tickformat=".0%")
-            fig.update_yaxes(title_text="平均告警延迟（毫秒）", secondary_y=True, range=[y0, y1])
-            fig.update_layout(
-                template=template,
-                title=dict(text="检测窗口大小对检测质量指标的影响", font=dict(size=20)),
-                height=470,
-                margin=dict(l=56, r=48, t=80, b=56),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            )
-            save(
-                fig,
-                "window_vs_detection_rate.html",
-                "检测窗口大小对检测质量指标的影响",
-                f"归一化告警数随窗口扩大的变化（基准告警数 {baseline_alerts:.0f} 条）。",
-            )
+        macro_precision = [to_float(r, "macro_precision") for r in w_rows]
+        macro_recall = [to_float(r, "macro_recall") for r in w_rows]
+        macro_f1 = [to_float(r, "macro_f1") for r in w_rows]
+        q_lo, q_hi = clamp_unit_axis(macro_precision + macro_recall + macro_f1)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=labels, y=macro_precision, name="Macro Precision", mode="lines+markers", line=dict(color=palette["primary"], width=3), marker=dict(size=10)))
+        fig.add_trace(go.Scatter(x=labels, y=macro_recall, name="Macro Recall", mode="lines+markers", line=dict(color=palette["accent"], width=3), marker=dict(size=10)))
+        fig.add_trace(go.Scatter(x=labels, y=macro_f1, name="Macro F1", mode="lines+markers", line=dict(color=palette["muted"], width=3), marker=dict(size=10)))
+        fig.update_xaxes(title_text="Window size", categoryorder="array", categoryarray=labels)
+        fig.update_yaxes(title_text="Case-level quality score", range=[q_lo, q_hi], tickformat=".0%")
+        fig.update_layout(
+            template=template,
+            title=dict(text="Window size vs case-level quality metrics", font=dict(size=20)),
+            height=470,
+            margin=dict(l=56, r=48, t=80, b=56),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        )
+        save(
+            fig,
+            "window_vs_detection_rate.html",
+            "Window size vs case-level quality metrics",
+            "Uses scoped-alert TP/FP/FN aggregates and plots macro Precision / Recall / F1.",
+        )
 
     b_rows = [r for r in read_csv(inp / "perf_backend.csv") if r.get("case", "").startswith("b")]
     if b_rows:
@@ -668,14 +569,14 @@ def main():
         cpu = [to_float(r, "cpu_pct") for r in b_rows]
         c0, c1 = y_axis_range(cpu, pad_ratio=0.20, floor_zero=True)
         m0, m1 = y_axis_range(mem, pad_ratio=0.14, floor_zero=False)
-        fig = make_subplots(rows=1, cols=2, subplot_titles=("CPU 占用率（均值）", "内存占用（均值，MiB）"), horizontal_spacing=0.14)
+        fig = make_subplots(rows=1, cols=2, subplot_titles=("CPU % (sample mean)", "Memory MiB (sample mean)"), horizontal_spacing=0.14)
         fig.add_trace(go.Bar(x=labels, y=cpu, name="CPU %", marker_color=palette["primary"], text=[f"{v:.1f}" for v in cpu], textposition="outside"), row=1, col=1)
-        fig.add_trace(go.Bar(x=labels, y=mem, name="内存（MiB）", marker_color=palette["muted"], text=[f"{v:.0f}" for v in mem], textposition="outside"), row=1, col=2)
+        fig.add_trace(go.Bar(x=labels, y=mem, name="Memory MiB", marker_color=palette["muted"], text=[f"{v:.0f}" for v in mem], textposition="outside"), row=1, col=2)
         fig.update_yaxes(range=[c0, c1], row=1, col=1)
         fig.update_yaxes(range=[m0, m1], row=1, col=2)
-        fig.update_layout(template=template, title=dict(text="HashMap 与 RocksDB 状态后端资源开销对比", font=dict(size=18)), height=440, showlegend=False, margin=dict(l=56, r=40, t=88, b=56))
-        save(fig, "backend_resource.html", "HashMap 与 RocksDB 状态后端资源开销对比",
-             "HashMap 后端 CPU 占用率（136.6%）显著高于 RocksDB（80.9%）：HashMap 将规则状态全量存储于 JVM 堆内，并行度为 4 时堆写入压力较高，GC 线程频繁触发并占用 CPU；RocksDB 通过堆外 native 内存管理状态，JVM 堆压力低，GC 开销小。内存方面 RocksDB（1483 MiB）略高于 HashMap（1395 MiB），差值来自 RocksDB 的 Block Cache 与 MemTable 本地内存开销。两种后端在相同配置下的检测精度完全一致，资源差异不影响检测质量。")
+        fig.update_layout(template=template, title=dict(text="Backend resource comparison", font=dict(size=18)), height=440, showlegend=False, margin=dict(l=56, r=40, t=88, b=56))
+        save(fig, "backend_resource.html", "Backend resource comparison",
+             "Compares TaskManager CPU and memory between HashMap and RocksDB backends.")
 
     rule_metric_rows = read_csv(inp / "rule_metrics.csv")
     if not rule_metric_rows:
@@ -694,13 +595,13 @@ def main():
         f1 = [to_float(r, "f1") for r in behavior_rows]
         score_lo, score_hi = clamp_unit_axis(prec + rec + f1)
         fig = go.Figure()
-        fig.add_trace(go.Bar(name="精确率", x=types, y=prec, marker_color=palette["primary"], text=ratio_text(prec), textposition="outside"))
-        fig.add_trace(go.Bar(name="召回率", x=types, y=rec, marker_color=palette["accent"], text=ratio_text(rec), textposition="outside"))
-        fig.add_trace(go.Bar(name="F1 分数", x=types, y=f1, marker_color=palette["muted"], text=ratio_text(f1), textposition="outside"))
-        fig.update_yaxes(title_text="各规则检测质量分数", range=[score_lo, score_hi], tickformat=".0%")
-        fig.update_layout(template=template, title=dict(text=f"各异常类型检测精确率、召回率与 F1 分数（{reference_case} 组）", font=dict(size=18)), barmode="group", bargap=0.18, bargroupgap=0.08, height=460, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), margin=dict(l=56, r=40, t=88, b=72))
-        save(fig, "detection_accuracy.html", "各异常类型检测质量指标",
-             f"基于 {reference_case} 基准组的逐规则 TP/FP/FN 统计：三类异常规则（异地登录、高频下单、高频访问）的精确率均约 83%，召回率约 75%，F1 约 79%，三者表现较为均衡。约 25% 的漏检源于异常行为的时间跨度超出当前窗口（60s），与窗口实验结论相互印证，表明将窗口扩大至 300s 可将召回率提升至 100% 而精确率下降幅度有限。",
+        fig.add_trace(go.Bar(name="Precision", x=types, y=prec, marker_color=palette["primary"], text=ratio_text(prec), textposition="outside"))
+        fig.add_trace(go.Bar(name="Recall", x=types, y=rec, marker_color=palette["accent"], text=ratio_text(rec), textposition="outside"))
+        fig.add_trace(go.Bar(name="F1", x=types, y=f1, marker_color=palette["muted"], text=ratio_text(f1), textposition="outside"))
+        fig.update_yaxes(title_text="Per-rule quality score", range=[score_lo, score_hi], tickformat=".0%")
+        fig.update_layout(template=template, title=dict(text=f"Per-rule Precision / Recall / F1 ({reference_case})", font=dict(size=18)), barmode="group", bargap=0.18, bargroupgap=0.08, height=460, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), margin=dict(l=56, r=40, t=88, b=72))
+        save(fig, "detection_accuracy.html", "Per-rule quality metrics",
+             f"Uses true per-rule TP/FP/FN metrics from rule_metrics.csv for reference case {reference_case}.",
              span12=True)
     else:
         functional_rows = patch_functional_metric_rows(read_csv(inp / "functional_metrics.csv"))

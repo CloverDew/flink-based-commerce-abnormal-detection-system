@@ -27,8 +27,9 @@ def parse_args():
     parser.add_argument("--window-ms", type=int, default=60000, help="Rule window size in milliseconds.")
     parser.add_argument(
         "--paper-profile",
-        action="store_true",
-        help="Stronger bursts (orders/views packed in a few seconds) and higher default abnormal cohort for clearer Flink hits.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Window-adaptive burst timings for high detection rate in thesis charts (default: on).",
     )
     parser.add_argument("--output-rules", default="samples/thesis-risk-rules.json")
     parser.add_argument("--output-events", default="samples/thesis-behavior-events.jsonl")

@@ -1,6 +1,6 @@
-# 电商异常用户行为实时检测系统
+# 电商异常用户行为实时检测系统！！保姆级！！运行指南
 
-基于 Apache Flink 的实时风控检测系统，用于识别电商平台中的异常用户行为（如撞库攻击、刷单、异常登录等）。
+基于 Apache Flink 的实时风控检测系统，用于识别电商平台中的异常用户行为，如撞库攻击、刷单、异常登录等。
 
 ## 系统架构
 
@@ -28,15 +28,15 @@ Runtime Config:
 - 环境变量覆盖                (运行时覆盖 Kafka/topic/checkpoint 等)
 ```
 
-## 输出与反馈层（告警推送 + 实时看板 + 特征缓存）
+## 输出与反馈层
 
 本项目支持一套“三位一体”的反馈机制：
 
-- **告警推送**：Flink 任务将 `AlertEvent` 输出到 Kafka `alerts` topic（或直接 PrintSink）。
+- **告警推送**：Flink 任务将 `AlertEvent` 输出到 Kafka `alerts` topic。
 - **实时看板（ClickHouse + Grafana）**：ClickHouse 通过 Kafka Engine 订阅 `alerts` topic，写入明细表与聚合表；Grafana 读取 ClickHouse 展示吞吐、类型占比、Top 攻击源等面板。
-- **特征缓存（Redis）**：可选组件。提供 `AlertFeatureCacheConsumer`，从 Kafka `alerts` 消费告警，把 `AlertEvent.extra`（特征 JSON）按用户/IP 写入 Redis（带 TTL），便于业务侧快速查询最近特征快照。
+- **特征缓存（Redis）**：提供 `AlertFeatureCacheConsumer`，从 Kafka `alerts` 消费告警，把 `AlertEvent.extra`（特征 JSON）按用户/IP 写入 Redis，便于业务侧快速查询最近特征快照。
 
-### 一键启动（含 ClickHouse/Grafana/Redis）
+### 一键启动
 
 ```bash
 docker compose up -d zookeeper kafka clickhouse grafana redis jobmanager taskmanager
@@ -45,17 +45,17 @@ docker compose up -d zookeeper kafka clickhouse grafana redis jobmanager taskman
 访问：
 
 - Flink Web UI：`http://localhost:8081`
-- Grafana：`http://localhost:3000`（默认 `admin/admin`）
+- Grafana：`http://localhost:3000`
 - ClickHouse HTTP：`http://localhost:8123`
 
 说明：
 
 - ClickHouse 初始化 SQL 位于 `docker/clickhouse/init/`，会自动创建 `risk.alerts`、`risk.alerts_agg_1m` 等表，并从 Kafka `alerts` topic 实时入库。
-- Grafana 会自动安装 ClickHouse 数据源插件并加载内置看板（`docker/grafana/dashboards/`）。
+- Grafana 会自动安装 ClickHouse 数据源插件并加载内置看板。
 
-### 启动特征缓存消费者（可选）
+### 启动特征缓存消费者
 
-在本机（或容器内）先构建 jar：
+在本机先构建 jar：
 
 ```bash
 mvn -DskipTests package
@@ -104,38 +104,77 @@ java -cp target/flink-based-commerce-abnormal-detection-system-1.0-SNAPSHOT.jar 
 - 支持 Kafka Sink（生产环境）
 - 告警包含完整的上下文信息
 
-## Kaggle 数据源建议（可直接用于本项目）
+### 5. 风控规则评分
 
-下面这些数据集最贴近“电商用户行为异常检测”：
+系统在 CEP 模式匹配成功后，会对每条候选命中计算**风险评分**，只有评分达到规则阈值时才输出告警（见 `AbnormalPatternDetector.toAlertEvent`）。
 
-- [E-commerce Clickstream and Transaction Dataset](https://www.kaggle.com/datasets/waqi786/e-commerce-clickstream-and-transaction-dataset)
-- [E-commerce User Behavior and Transaction Dataset](https://www.kaggle.com/datasets/ziya07/e-commerce-user-behavior-and-transaction-dataset)
-- [E-commerce behavior data from multi category store](https://www.kaggle.com/datasets/mkechinov/ecommerce-behavior-data-from-multi-category-store)
-- [Clickstream Data for Online Shopping](https://www.kaggle.com/datasets/tunguz/clickstream-data-for-online-shopping)
-- [IEEE-CIS Fraud Detection](https://www.kaggle.com/c/ieee-fraud-detection/data)
+#### 评分公式
 
-## 本项目采用的数据集（推荐）
+```
+riskScore = severityWeight × (1 + matchCount/threshold + min(1.5, densityPerSec/10))
+```
 
-为了最容易跑通并复现实验，建议优先使用：
+其中：
 
-- [E-commerce behavior data from multi category store](https://www.kaggle.com/datasets/mkechinov/ecommerce-behavior-data-from-multi-category-store)
+| 因子 | 含义 |
+|------|------|
+| `severityWeight` | 规则严重程度权重，越大表示该类异常危害越高 |
+| `matchCount / threshold` | 超出触发阈值的倍数，匹配事件越多分越高 |
+| `densityPerSec` | 窗口内事件密度（events/s），`matchCount / (windowSizeMs/1000)` |
+| `scoreThreshold` | 规则配置的评分门槛，**仅当 `riskScore >= scoreThreshold` 时才下发告警** |
 
-最符合本项目的一条直达链接（建议优先下载这个）：
+#### 规则权重与阈值
 
-- **Kaggle 数据集直达**：<https://www.kaggle.com/datasets/mkechinov/ecommerce-behavior-data-from-multi-category-store>
-- 下载后建议放到：`./data/kaggle-events.csv`
+`RiskRule` 中两个评分相关字段：
 
-对应导入 profile：
+- `severityWeight`：严重程度权重，默认 `1.0`
+- `scoreThreshold`：评分拦截阈值，默认 `1.0`
 
-- `PROFILE=multi_category`
+`KaggleRuleTemplateGenerator` 按规则类型自动填充：
 
-原因：
+| 规则类型 | severityWeight | scoreThreshold |
+|---------|----------------|----------------|
+| PAYMENT_FRAUD | 2.5 | 3.0 |
+| CREDENTIAL_STUFFING | 2.0 | 2.5 |
+| ORDER_BRUSH | 1.8 | 2.2 |
+| ABNORMAL_LOGIN | 1.6 | 2.0 |
+| HIGH_FREQ_ACCESS | 1.3 | 1.8 |
 
-- 字段与项目模型最贴近（`event_time`、`event_type`、`user_id`、`user_session`、`product_id`）
-- 能稳定触发至少 3 类异常规则（登录失败突增/高频下单/高频加购或浏览）
-- 不需要额外手工清洗即可进入 Kafka
+合成规则（`samples/run_thesis_experiments.py`）使用略低的阈值以便在可控数据上稳定触发：
 
-### 字段映射（已在代码中兼容）
+| 规则类型 | severityWeight | scoreThreshold | 触发条件 |
+|---------|----------------|----------------|---------|
+| ABNORMAL_LOGIN | 1.6 | 1.5 | 60s 内登录 + 敏感操作 ≥ 2 次 |
+| ORDER_BRUSH | 1.8 | 1.8 | 60s 内下单 ≥ 5 次 |
+| HIGH_FREQ_ACCESS | 1.3 | 1.5 | 60s 内浏览 ≥ 100 次 |
+
+#### 告警等级
+
+`AlertEvent` 按 `matchCount / threshold` 比值划分等级：
+
+| 比值 | 等级 |
+|------|------|
+| ≥ 3.0 | CRITICAL |
+| ≥ 2.0 | HIGH |
+| ≥ 1.0 | MEDIUM |
+| < 1.0 | LOW |
+
+## 测试数据：来源、划分与注入
+
+本项目有**两条数据通路**，用途不同：
+
+| 通路 | 用途 | 数据性质 |
+|------|------|---------|
+| **A. Kaggle 真实数据** | Docker 演示、生产形态联调 | 真实电商点击流（无显式异常标签） |
+| **B. 论文合成数据** | 毕业论文对照实验、功能/性能评估 | 带标注的合成样本（`synthetic / thesis sample`） |
+
+### A. Kaggle 真实数据
+
+- **数据集**：<https://www.kaggle.com/datasets/mkechinov/ecommerce-behavior-data-from-multi-category-store>
+- **本地路径**：`./data/kaggle-events.csv`（仓库不附带，需自行下载）
+- **推荐切分**：原始 CSV 体积大，建议本地截取前 **10万～20万行** 做开发调试；全量导入通过 `MAX_ROWS` 控制
+
+#### 字段映射
 
 本项目内部标准字段：
 
@@ -147,27 +186,137 @@ java -cp target/flink-based-commerce-abnormal-detection-system-1.0-SNAPSHOT.jar 
 - `productId`
 - `amount`
 
-Kaggle 常见字段自动映射关系：
+字段映射关系：
 
 - `user_id -> userId`
-- `event_type -> actionType`（自动转大写）
-- `event_time -> timestamp`（支持 ISO 字符串、秒/毫秒时间戳）
+- `event_type -> actionType`
+- `event_time -> timestamp`
 - `user_session / session_id -> sessionId`
 - `product_id -> productId`
 - `ip_address -> ip`
-- `TransactionDT -> timestamp`（按 IEEE-CIS 参考起点换算为绝对时间）
+- `TransactionDT -> timestamp`
 
-### 推荐接入方式
+#### 数据划分说明
 
-1. 先把 Kaggle CSV 转成 JSON（每行一个 JSON）
-2. 推送到 `user-behavior` Kafka Topic
-3. 启动本项目主任务，直接消费并检测
+Kaggle 通路**不做传统监督学习意义上的 train/test 切分**，而是：
 
-已内置工具类：`cn.edu.ustb.detection.tools.KaggleCsvBootstrapTool`
+1. **按行数截断**：`bootstrap.conf` 中 `MAX_ROWS`（`-1` 表示全量）控制导入规模
+2. **按 Profile 映射**：`multi_category` / `clickstream` / `ieee_cis` 三套字段映射与规则模板，同一 CSV 可选用不同 profile 解释
+3. **按 Kafka 分区键**：行为事件以 `userId` 为 key 写入，保证同一用户事件进入同一分区，便于 Flink keyBy 聚合
 
-支持能力：
+#### 注入方式
 
-- 自动识别常见 Kaggle profile（`auto`）
+```
+kaggle-events.csv
+    → KaggleCsvBootstrapTool
+    → Kafka: user-behavior
+
+KaggleRuleTemplateGenerator，按 PROFILE 生成规则
+    → JsonFileKafkaPublisher
+    → Kafka: risk-rules（key=ruleId）
+```
+
+运行脚本：`docker/scripts/bootstrap-kaggle.sh`
+
+```bash
+docker compose run --rm --entrypoint /bin/bash tools \
+  -lc "/opt/app/scripts/bootstrap-kaggle.sh"
+```
+
+### B. 论文合成数据
+
+用于毕业论文 14 组对照实验，数据在生成阶段即完成**正负样本划分**，不依赖 Kaggle 原始标签。
+
+#### 数据来源与构成
+
+| 组成部分 | 生成方式 | 用户 ID 前缀 | 角色 |
+|---------|---------|-------------|------|
+| 正常背景流 | 从 Kaggle JSONL 随机抽样，或 `fallback_normal_events` 生成 | `normal_user_*` | 负样本（不应触发告警） |
+| 异常登录 | `inject_abnormal_events` 注入 | `al_user_*` / `al_u_*` | 正样本（应触发 ABNORMAL_LOGIN） |
+| 高频下单 | 同上 | `ob_user_*` / `ob_u_*` | 正样本（应触发 ORDER_BRUSH） |
+| 高频访问 | 同上 | `hf_user_*` / `hf_u_*` | 正样本（应触发 HIGH_FREQ_ACCESS） |
+
+生成脚本：
+
+```bash
+# 生成 rules + events（输出到 samples/thesis-*.json / jsonl）
+python samples/generate_thesis_data.py --paper-profile
+
+# 可选：以 Kaggle 导出的 JSONL 作为正常背景
+python samples/generate_thesis_data.py \
+  --base-jsonl .data/user-behavior.jsonl \
+  --normal-limit 30000 \
+  --abnormal-user-count 220
+```
+
+输出文件：
+
+- `samples/thesis-risk-rules.json` — 3 条论文规则
+- `samples/thesis-behavior-events.jsonl` — 正常 + 异常混合事件流
+
+#### 实验案例划分
+
+`run_thesis_experiments.py` 将实验按**单一变量**切分为独立 case，每组使用隔离的 Kafka Topic，避免串扰：
+
+| 前缀 | 变量 | 取值 | 固定默认值 |
+|------|------|------|-----------|
+| `p1`–`p8` | 并行度 | 1, 2, 4, 8 | window=60s, backend=hashmap, events=30k |
+| `w30000`–`w600000` | 规则窗口 | 30s, 60s, 300s, 600s | parallelism=4, events=30k |
+| `bhashmap` / `brocksdb` | 状态后端 | HashMap / RocksDB | parallelism=4, window=60s |
+| `s10000`–`s200000` | 事件规模 | 1万, 5万, 10万, 20万 | parallelism=4, backend=rocksdb |
+
+#### 评估指标如何划分正负
+
+实验评估以**用户级**为单位：
+
+1. **正样本（Expected）**：生成器中标记的异常用户集合（`expected_users_by_rule_type`）
+2. **预测（Detected）**：Flink 告警按 `(ruleType, userId)` 去重后的用户集合
+3. **TP / FP / FN**：
+   - TP = 正样本 ∩ 预测
+   - FP = 预测 − 正样本
+   - FN = 正样本 − 预测
+4. **宏平均**：三条规则各自算 P/R/F1 后取算术平均
+
+功能验证（`export_functional_metrics.py`）按用户 ID 前缀识别异常 cohort，默认每类取 120 个用户计算 `functional_metrics.csv`。
+
+#### 注入方式
+
+```
+generate_rules_and_events()        # 按 case 生成 rules.json + events.jsonl
+    ↓
+restart_job()                      # 改写 flink-job.conf，重启 Flink
+    ↓
+publish_rules()                    # kafka-console-producer → exp-rules-*
+publish_events_and_measure()       # kafka-console-producer → exp-behavior-*（key=userId）
+    ↓
+Flink 检测 → exp-alerts-*
+    ↓
+capture_alerts()                   # 消费告警写 alerts-*.jsonl
+compute_case_quality_metrics()     # TP/FP/FN → CSV + 图表
+```
+
+完整实验：
+
+```bash
+docker compose up -d zookeeper kafka jobmanager taskmanager
+python samples/run_thesis_experiments.py
+# 图表：.data/experiment/figures/index.html
+```
+
+验证：
+
+```bash
+python samples/verify_thesis_detection.py   # 发布 samples/thesis-* 到共享 Topic
+python samples/export_functional_metrics.py \
+  --events samples/thesis-behavior-events.jsonl \
+  --alerts .data/alerts-captured.jsonl
+```
+
+### 接入方式
+
+工具类支持：
+
+- 识别常见 Kaggle profile
 - 指定 profile（`multi_category` / `clickstream` / `ieee_cis`）
 - 输出到 JSONL 文件
 - 直接推送到 Kafka `user-behavior` Topic
@@ -176,7 +325,7 @@ Kaggle 常见字段自动映射关系：
 
 - 按数据 profile 生成可直接下发的 `risk-rules` JSON
 - 适配 `multi_category` / `clickstream` / `ieee_cis`
-- 可通过 `version` 参数控制规则版本号
+- 通过 `version` 参数控制规则版本号
 
 示例（CSV -> JSONL）：
 
@@ -199,7 +348,7 @@ java -cp target/flink-based-commerce-abnormal-detection-system-1.0-SNAPSHOT.jar 
   --profile auto
 ```
 
-示例（CSV -> JSONL + Kafka 同时）：
+示例（CSV -> JSONL + Kafka）：
 
 ```bash
 java -cp target/flink-based-commerce-abnormal-detection-system-1.0-SNAPSHOT.jar \
@@ -222,11 +371,9 @@ java -cp target/flink-based-commerce-abnormal-detection-system-1.0-SNAPSHOT.jar 
   --output samples/generated-risk-rules.json
 ```
 
-生成后你可以直接把 `samples/generated-risk-rules.json` 中每行（或每个对象）写入 `risk-rules` topic 做热更新。
-
 ## 数据模型
 
-### UserBehavior（用户行为事件）
+### UserBehavior
 ```json
 {
   "userId": "user123",
@@ -240,7 +387,7 @@ java -cp target/flink-based-commerce-abnormal-detection-system-1.0-SNAPSHOT.jar 
 }
 ```
 
-### RiskRule（风控规则）
+### RiskRule
 ```json
 {
   "ruleId": "rule-001",
@@ -256,7 +403,7 @@ java -cp target/flink-based-commerce-abnormal-detection-system-1.0-SNAPSHOT.jar 
 }
 ```
 
-### AlertEvent（告警事件）
+### AlertEvent
 ```json
 {
   "alertId": "uuid",
@@ -271,12 +418,12 @@ java -cp target/flink-based-commerce-abnormal-detection-system-1.0-SNAPSHOT.jar 
 }
 ```
 
-## 快速开始
+## 环境部署
 
-### 环境要求
-- JDK 11+
-- Maven 3.6+
-- Kafka 2.8+（可选，测试可用内存模式）
+### 开发工具
+- JDK 11
+- Maven 3.6
+- Kafka 2.8
 
 ### 编译打包
 ```bash
@@ -288,12 +435,12 @@ mvn clean package -DskipTests
 mvn test
 ```
 
-### 本地运行（Print Sink）
+### 本地运行，控制台打印
 ```bash
-# 直接运行（使用默认配置）
+# 直接运行
 mvn exec:java -Dexec.mainClass="cn.edu.ustb.detection.AbnormalBehaviorDetectionJob"
 
-# 或使用打包后的 JAR
+# 使用打包后的 JAR
 java -jar target/flink-based-commerce-abnormal-detection-system-1.0-SNAPSHOT.jar
 ```
 
@@ -311,17 +458,17 @@ flink run -c cn.edu.ustb.detection.AbnormalBehaviorDetectionJob \
 
 ## Docker 运行
 
-推荐把 Flink 作业打成你自己的应用镜像（默认示例名：`cloverdew/flink-commerce-abnormal-detection`，也可用环境变量 `FLINK_APP_IMAGE` 改成你在 Docker Hub 上的任意仓库名）。当前 `docker-compose.yml` 仍然负责编排 Kafka、ClickHouse、Grafana、Redis，但 `jobmanager` / `taskmanager` / `tools` 都会使用同一个 Flink 应用镜像。
+已有本人打包的镜像，可以直接用，如果需要特殊定制需求请自行打包镜像，不会打包镜像请自行探索，readme不赘述！！！docker 镜像在仓库搜索：
 
-### 1) 构建并推送你的镜像
+| Contains                                                     | Visibility  | Scout | Visibility | Scout    |
+| :----------------------------------------------------------- | :---------- | :---- | :--------- | :------- |
+| [cloverdew/flink-commerce-abnormal-detection](https://hub.docker.com/repository/docker/cloverdew/flink-commerce-abnormal-detection) | 24 days ago | image | Public     | Inactive |
+
+### 1) 如果想使用本人构建镜像，请拉取
 
 ```bash
-docker build -t cloverdew/flink-commerce-abnormal-detection:latest .
-docker login
-docker push cloverdew/flink-commerce-abnormal-detection:latest
+docker pull cloverdew/flink-commerce-abnormal-detection:latest
 ```
-
-如果是私有仓库，运行前先确保本机已完成 `docker login`。
 
 ### 2) 指定 Compose 使用的镜像
 
@@ -337,9 +484,7 @@ Bash:
 export FLINK_APP_IMAGE=cloverdew/flink-commerce-abnormal-detection:latest
 ```
 
-如果不设置，Compose 会默认使用 `cloverdew/flink-commerce-abnormal-detection:latest`。
-
-### 3) 启动基础组件（Kafka + Flink）
+### 3) 启动基础组件
 
 ```bash
 docker compose up -d zookeeper kafka jobmanager taskmanager
@@ -353,7 +498,7 @@ docker compose up -d zookeeper kafka clickhouse grafana redis jobmanager taskman
 
 ### 4) 准备数据文件
 
-把 Kaggle CSV 放到本地 `./data/kaggle-events.csv`。`tools` 服务会把它挂载到容器内 `/opt/app/data/kaggle-events.csv`。
+把 Kaggle CSV 放到本地 `./data/kaggle-events.csv`即可。项目中的`tools` 服务会把它挂载到容器内 `/opt/app/data/kaggle-events.csv`。
 
 ### 5) 在 Docker 内提交 Flink 任务
 
@@ -362,21 +507,21 @@ docker compose run --rm --entrypoint /bin/bash tools \
   -lc "/opt/app/scripts/submit-flink-job.sh"
 ```
 
-### 6) 在 Docker 内导入 Kaggle 数据 + 下发规则
+### 6) 在 Docker 内导入 Kaggle 数据并下发规则
 
 ```bash
 docker compose run --rm --entrypoint /bin/bash tools \
   -lc "/opt/app/scripts/bootstrap-kaggle.sh"
 ```
 
-### 7) 一键端到端
+### 7) 端到端运行脚本
 
 ```bash
 docker compose run --rm --entrypoint /bin/bash tools \
   -lc "/opt/app/scripts/run-e2e.sh"
 ```
 
-### 最短可执行路径
+### 懒人 or 零技术人士执行步骤如下：
 
 ```bash
 # 0. 先把 Kaggle CSV 放到 ./data/kaggle-events.csv
@@ -394,22 +539,22 @@ docker compose run --rm --entrypoint /bin/bash tools -lc "/opt/app/scripts/submi
 docker compose run --rm --entrypoint /bin/bash tools -lc "/opt/app/scripts/bootstrap-kaggle.sh"
 ```
 
-### 镜像内默认配置与覆盖
+### 镜像配置
 
 镜像内已提供两份默认配置文件：
 
 - `/opt/app/conf/flink-job.conf`
 - `/opt/app/conf/bootstrap.conf`
 
-默认脚本行为：
+脚本：
 
 - `submit-flink-job.sh` 优先读取 `/opt/app/conf/flink-job.conf`
 - `bootstrap-kaggle.sh` 优先读取 `/opt/app/conf/bootstrap.conf`
-- 本地 `./docker/conf` 会挂载到 `/opt/app/conf`（便于用仓库里的 `flink-job.conf` / `bootstrap.conf` 覆盖镜像默认，例如论文实验脚本会改写 `flink-job.conf`）
+- 本地 `./docker/conf` 会挂载到 `/opt/app/conf`
 - 本地 `./data` 会挂载到 `/opt/app/data`
 - 本地 `./samples` 会挂载到 `/opt/app/samples`
 
-推荐通过环境变量覆盖运行时差异，而不是重新 build 镜像。例如：
+如果确实要改目录，用运行时环境变量即可，不推荐像傻瓜一样重新构建镜像，例如：
 
 ```bash
 docker compose run --rm --entrypoint /bin/bash \
@@ -422,15 +567,15 @@ docker compose run --rm --entrypoint /bin/bash \
 ### 脚本说明
 
 - `docker/scripts/build-jar.sh`：本地源码模式下构建 fat jar
-- `docker/scripts/submit-flink-job.sh`：提交 Flink 作业，优先使用镜像内 jar 与配置
+- `docker/scripts/submit-flink-job.sh`：提交 Flink 作业，使用镜像内 jar 与配置
 - `docker/scripts/bootstrap-kaggle.sh`：生成规则模板、发布规则、导入 Kaggle 行为数据
-- `docker/scripts/run-e2e.sh`：一键串行执行
+- `docker/scripts/run-e2e.sh`：一键执行
 
-## 参数影响与观测建议
+## 参数与观测
 
-当前框架基于“规则 + 时间窗口计数”模型，稳定可覆盖至少 3 类异常（如登录失败突增、高频下单、高频加购/浏览）。
+当前框架基于“规则 + 时间窗口计数”模型，稳定可覆盖至少 3 类异常，如登录失败突增、高频下单、高频加购/浏览。如果需要其他的，请自行构建谢谢，不推荐傻瓜式重写一大遍代码。
 
-### 调参建议
+### 调参
 
 - `PARALLELISM`：提高可提升吞吐，但会增加资源占用和 checkpoint 开销
 - `STATE_BACKEND=rocksdb`：大状态更稳，延迟略升；`hashmap` 延迟更低但内存压力更大
@@ -438,13 +583,13 @@ docker compose run --rm --entrypoint /bin/bash \
 - `CHECKPOINT_TIMEOUT_MS`：过小会导致频繁 checkpoint 失败
 - `CHECKPOINT_UNALIGNED_ENABLED=true`：高背压时可提升 checkpoint 成功率
 
-### 建议重点观察指标（CK/Checkpoint）
+### 观察指标（CK/Checkpoint）
 
-- Checkpoint Duration（持续时间）
+- Checkpoint Duration
 - Checkpoint Failed / Completed 次数
 - End-to-End Latency
 - Backpressure 状态
-- Kafka consumer lag（规则流与行为流）
+- Kafka consumer lag
 
 ## 配置参数
 
@@ -458,7 +603,7 @@ docker compose run --rm --entrypoint /bin/bash \
 | kafka.sink.enabled | false | 是否启用 Kafka 告警输出 |
 | parallelism | CPU核心数 | 任务并行度 |
 
-## 项目结构
+## 项目结构（保姆级解说）
 
 ```
 src/
@@ -486,13 +631,13 @@ src/
     └── serialization/SerializationTest.java # 序列化测试
 ```
 
-## 扩展指南
+## 如需自行定制扩展：
 
 ### 添加新的规则类型
 
 1. 在 `RiskRule.RuleType` 枚举中添加新类型
 2. 在 `CepPatternFactory` 中实现对应的 Pattern
-3. 更新 `AbnormalPatternDetector` 中的处理逻辑（如需要）
+3. 更新 `AbnormalPatternDetector` 中的处理逻辑
 
 ### 添加新的分组维度
 
@@ -523,39 +668,28 @@ src/
 
 ### Testcontainers 端到端调试
 
-如果你不想手动进入 Docker 容器，可直接运行这个测试：
+如果不想手动进入 Docker 容器，直接运行：
 
 ```bash
 mvn -Dit.testcontainers=true -Dtest=KafkaE2ETestcontainersTest test
 ```
 
-该测试会自动：
-
-1. 启动 Kafka Testcontainer
-2. 启动 Flink 流作业（本地进程）
-3. 写入规则和行为事件到 Kafka
-4. 从 `tc-alerts` 主题消费并断言告警是否触发
-
-前提：本机 Docker Desktop 可用。
-
-说明：该测试默认不会在普通 `mvn test` 中执行，避免影响日常开发速度；按上面的命令显式开启即可。
-
 ## 注意事项
 
 1. **生产环境部署**
-   - 建议开启 Checkpoint，确保状态一致性
+   - 开启 Checkpoint，确保状态一致性
    - 根据数据量调整并行度和资源配置
    - 监控 Kafka 消费延迟
 
 2. **规则配置**
    - 规则版本号递增，确保更新生效
    - 合理设置时间窗口和阈值，避免误报
-   - 测试环境验证规则后再上线
+   - 测试环境验证规则后再上！！！
 
 3. **性能优化**
    - 大规模场景考虑使用 RocksDB 状态后端
    - 合理设置 Watermark 间隔
-   - 监控 Backpressure 情况
+   - 监控 Backpressure 情况，不要问怎么观察，Flink Web UI 欢迎你
 
 ## License
 
