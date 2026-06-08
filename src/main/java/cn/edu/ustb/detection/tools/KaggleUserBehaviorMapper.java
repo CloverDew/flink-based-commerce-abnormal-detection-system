@@ -154,6 +154,9 @@ public class KaggleUserBehaviorMapper {
             return -1L;
         }
         String value = raw.trim();
+        if (value.endsWith(" UTC")) {
+            value = value.substring(0, value.length() - 4).trim();
+        }
         long numeric = parseLong(value);
         if (numeric > 0) {
             if (numeric < 10_000_000_000L) {

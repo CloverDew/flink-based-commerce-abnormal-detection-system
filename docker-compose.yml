@@ -89,5 +89,6 @@ services:
         entrypoint: ["/bin/bash", "-lc", "sleep infinity"]
         volumes:
             - ./docker/conf:/opt/app/conf
+            - ./docker/scripts:/opt/app/scripts
             - ./data:/opt/app/data
             - ./samples:/opt/app/samples

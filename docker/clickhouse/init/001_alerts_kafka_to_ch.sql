@@ -51,11 +51,11 @@ SELECT
   JSONExtractString(value, 'userId') AS userId,
   JSONExtractString(value, 'ip') AS ip,
   JSONExtractString(value, 'deviceId') AS deviceId,
-  toUInt32OrZero(JSONExtractInt(value, 'matchCount')) AS matchCount,
-  toFloat64OrZero(JSONExtractFloat(value, 'riskScore')) AS riskScore,
-  toInt64OrZero(JSONExtractInt(value, 'alertTimestamp')) AS alertTimestampMs,
-  toInt64OrZero(JSONExtractInt(value, 'firstEventTimestamp')) AS firstEventTimestampMs,
-  toInt64OrZero(JSONExtractInt(value, 'lastEventTimestamp')) AS lastEventTimestampMs,
+  toUInt32OrZero(JSONExtractString(value, 'matchCount')) AS matchCount,
+  toFloat64OrZero(JSONExtractString(value, 'riskScore')) AS riskScore,
+  toInt64OrZero(JSONExtractString(value, 'alertTimestamp')) AS alertTimestampMs,
+  toInt64OrZero(JSONExtractString(value, 'firstEventTimestamp')) AS firstEventTimestampMs,
+  toInt64OrZero(JSONExtractString(value, 'lastEventTimestamp')) AS lastEventTimestampMs,
   JSONExtractString(value, 'message') AS message,
   JSONExtractString(value, 'extra') AS extra
 FROM risk.alerts_kafka_raw;

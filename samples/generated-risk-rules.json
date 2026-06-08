@@ -8,11 +8,13 @@
   "threshold" : 3,
   "groupKeyType" : "BY_IP",
   "priority" : 10,
+  "severityWeight" : 2.0,
+  "scoreThreshold" : 2.5,
   "description" : "同一IP在1分钟内出现>=3次登录失败",
   "version" : 1,
-  "updateTimestamp" : 1776778092863,
-  "valid" : true,
-  "enabled" : true
+  "updateTimestamp" : 1780894838605,
+  "enabled" : true,
+  "valid" : true
 }, {
   "ruleId" : "mc-order-brush-user",
   "ruleName" : "多分类电商-用户高频下单",
@@ -23,11 +25,13 @@
   "threshold" : 5,
   "groupKeyType" : "BY_USER_ID",
   "priority" : 20,
+  "severityWeight" : 1.8,
+  "scoreThreshold" : 2.2,
   "description" : "同一用户2分钟内出现>=5次购买行为",
   "version" : 1,
-  "updateTimestamp" : 1776778092863,
-  "valid" : true,
-  "enabled" : true
+  "updateTimestamp" : 1780894838605,
+  "enabled" : true,
+  "valid" : true
 }, {
   "ruleId" : "mc-cart-bot-session",
   "ruleName" : "多分类电商-会话高频加购",
@@ -38,9 +42,11 @@
   "threshold" : 20,
   "groupKeyType" : "BY_SESSION_ID",
   "priority" : 30,
+  "severityWeight" : 2.0,
+  "scoreThreshold" : 1.8,
   "description" : "同一会话30秒内>=20次加购，疑似脚本",
   "version" : 1,
-  "updateTimestamp" : 1776778092863,
-  "valid" : true,
-  "enabled" : true
+  "updateTimestamp" : 1780894838605,
+  "enabled" : true,
+  "valid" : true
 } ]

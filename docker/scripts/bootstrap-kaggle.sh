@@ -58,21 +58,23 @@ mkdir -p "$(dirname "${RULE_FILE}")"
 
 "${WAIT_FOR_PORT_SCRIPT}" kafka 9092 180
 
+TOOL_CP="${JAR_PATH}:/opt/flink/lib/*"
+
 echo "[bootstrap-kaggle] generating rules profile=${PROFILE} version=${RULE_VERSION}"
-java -cp "${JAR_PATH}" cn.edu.ustb.detection.tools.KaggleRuleTemplateGenerator \
+java -cp "${TOOL_CP}" cn.edu.ustb.detection.tools.KaggleRuleTemplateGenerator \
   --profile "${PROFILE}" \
   --version "${RULE_VERSION}" \
   --output "${RULE_FILE}"
 
 echo "[bootstrap-kaggle] publishing rules to topic=${RULE_TOPIC}"
-java -cp "${JAR_PATH}" cn.edu.ustb.detection.tools.JsonFileKafkaPublisher \
+java -cp "${TOOL_CP}" cn.edu.ustb.detection.tools.JsonFileKafkaPublisher \
   --input "${RULE_FILE}" \
   --kafka-bootstrap "${KAFKA_BOOTSTRAP}" \
   --kafka-topic "${RULE_TOPIC}" \
   --key-field ruleId
 
 echo "[bootstrap-kaggle] sending user behavior from csv=${INPUT_CSV} to topic=${BEHAVIOR_TOPIC}"
-java -cp "${JAR_PATH}" cn.edu.ustb.detection.tools.KaggleCsvBootstrapTool \
+java -cp "${TOOL_CP}" cn.edu.ustb.detection.tools.KaggleCsvBootstrapTool \
   --input "${INPUT_CSV}" \
   --kafka-bootstrap "${KAFKA_BOOTSTRAP}" \
   --kafka-topic "${BEHAVIOR_TOPIC}" \

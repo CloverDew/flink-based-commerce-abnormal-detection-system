@@ -14,6 +14,13 @@
         <configuration>
           <source>${maven.compiler.source}</source>
           <target>${maven.compiler.target}</target>
+          <annotationProcessorPaths>
+            <path>
+              <groupId>org.projectlombok</groupId>
+              <artifactId>lombok</artifactId>
+              <version>${lombok.version}</version>
+            </path>
+          </annotationProcessorPaths>
         </configuration>
       </plugin>
       <plugin>
@@ -32,6 +39,7 @@
                   <exclude>com.google.code.findbugs:jsr305</exclude>
                   <exclude>org.slf4j:*</exclude>
                   <exclude>org.apache.logging.log4j:*</exclude>
+                  <exclude>org.projectlombok:lombok</exclude>
                 </excludes>
               </artifactSet>
               <filters>
@@ -102,6 +110,12 @@
       <groupId>org.apache.flink</groupId>
       <artifactId>flink-clients</artifactId>
       <version>1.17.2</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+      <version>1.18.34</version>
       <scope>provided</scope>
     </dependency>
     <dependency>
@@ -248,16 +262,17 @@
     </dependency>
   </dependencies>
   <properties>
-    <jackson.version>2.15.2</jackson.version>
+    <lombok.version>1.18.34</lombok.version>
     <flink.version>1.17.2</flink.version>
     <slf4j.version>2.0.9</slf4j.version>
-    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <log4j.version>2.20.0</log4j.version>
     <junit.version>5.10.0</junit.version>
-    <spotless.version>2.17.6</spotless.version>
-    <maven.compiler.source>11</maven.compiler.source>
-    <kafka.version>3.4.0</kafka.version>
     <maven.compiler.target>11</maven.compiler.target>
+    <kafka.version>3.4.0</kafka.version>
+    <log4j.version>2.20.0</log4j.version>
+    <spotless.version>2.17.6</spotless.version>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <jackson.version>2.15.2</jackson.version>
+    <maven.compiler.source>11</maven.compiler.source>
     <testcontainers.version>1.20.4</testcontainers.version>
   </properties>
 </project>
