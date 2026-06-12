@@ -150,11 +150,17 @@ public class CepPatternFactory {
         }).timesOrMore(rule.getThreshold()).greedy().within(Time.milliseconds(rule.getWindowSizeMs()));
     }
 
-    /** 创建支付欺诈检测模式 短时间内多次小额支付后进行大额支付 */
+    /** 创建支付欺诈检测模式：异地登录前置 + 小额试探 + 大额跃升（与 PaymentFraudProcess 复合逻辑对应） */
     public static Pattern<UserBehavior, ?> createPaymentFraudPattern(RiskRule rule) {
         log.info("Creating payment fraud pattern: windowSize={}ms", rule.getWindowSizeMs());
 
-        return Pattern.<UserBehavior>begin("smallPayments").where(new SimpleCondition<UserBehavior>() {
+        return Pattern.<UserBehavior>begin("remoteLogin").where(new SimpleCondition<UserBehavior>() {
+            @Override
+            public boolean filter(UserBehavior event) {
+                return event != null && isLoginSuccess(event.getActionType())
+                        && event.getIp() != null && !event.getIp().isEmpty();
+            }
+        }).followedBy("smallPayments").where(new SimpleCondition<UserBehavior>() {
             @Override
             public boolean filter(UserBehavior event) {
                 return event != null && isPayment(event.getActionType()) && event.getAmount() != null

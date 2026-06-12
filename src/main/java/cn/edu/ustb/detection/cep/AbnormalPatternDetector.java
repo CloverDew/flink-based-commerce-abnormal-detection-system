@@ -303,6 +303,10 @@ public class AbnormalPatternDetector {
         return null;
     }
 
+    /**
+     * 复合支付欺诈：窗口内须先出现异地登录（登录 IP 与后续支付 IP 不一致），
+     * 再满足小额试探 + 大额跃升的时序金额特征。
+     */
     private static List<UserBehavior> findPaymentFraudMatch(List<UserBehavior> events, long window, int threshold) {
         if (events == null || events.isEmpty()) {
             return null;
@@ -327,12 +331,46 @@ public class AbnormalPatternDetector {
                 }
             }
             if (smalls.size() >= threshold) {
-                List<UserBehavior> matched = new ArrayList<>(smalls);
+                UserBehavior remoteLogin = findRemoteLoginBefore(events, i, candidate, window);
+                if (remoteLogin == null) {
+                    continue;
+                }
+                List<UserBehavior> matched = new ArrayList<>();
+                matched.add(remoteLogin);
+                matched.addAll(smalls);
                 matched.add(candidate);
                 return matched;
             }
         }
         return null;
+    }
+
+    /** 在支付序列之前查找最近一次异地登录：LOGIN/LOGIN_SUCCESS 且 IP 与支付 IP 不同。 */
+    private static UserBehavior findRemoteLoginBefore(List<UserBehavior> events, int upToIndex,
+            UserBehavior payment, long window) {
+        if (payment == null || payment.getIp() == null || payment.getIp().isEmpty()) {
+            return null;
+        }
+        UserBehavior latest = null;
+        for (int k = 0; k <= upToIndex; k++) {
+            UserBehavior event = events.get(k);
+            if (event == null || !CepPatternFactory.isLoginSuccess(event.getActionType())) {
+                continue;
+            }
+            String loginIp = event.getIp();
+            if (loginIp == null || loginIp.isEmpty()
+                    || loginIp.equalsIgnoreCase(payment.getIp())) {
+                continue;
+            }
+            long delta = payment.getTimestamp() - event.getTimestamp();
+            if (delta < 0L || delta > window) {
+                continue;
+            }
+            if (latest == null || event.getTimestamp() > latest.getTimestamp()) {
+                latest = event;
+            }
+        }
+        return latest;
     }
 
     private static boolean isSmallPayment(UserBehavior event) {

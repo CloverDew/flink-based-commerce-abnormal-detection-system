@@ -187,7 +187,8 @@ public class AbnormalBehaviorDetectionJobTest {
 
         long baseTime = System.currentTimeMillis();
         List<UserBehavior> events = new ArrayList<>();
-        events.add(createPaymentEvent("user-pay", baseTime, 12.0));
+        events.add(createLoginSuccessEvent("user-pay", "10.0.0.1", baseTime));
+        events.add(createPaymentEvent("user-pay", baseTime + 2_000, 12.0));
         events.add(createPaymentEvent("user-pay", baseTime + 5_000, 25.0));
         events.add(createPaymentEvent("user-pay", baseTime + 8_000, 36.0));
         events.add(createPaymentFraudEvent("user-pay", baseTime + 12_000, 1500.0));
@@ -202,7 +203,30 @@ public class AbnormalBehaviorDetectionJobTest {
         AlertEvent alert = alerts.get(0);
         assertEquals(rule.getRuleId(), alert.getRuleId());
         assertEquals(RiskRule.RuleType.PAYMENT_FRAUD, alert.getRuleType());
-        assertTrue(alert.getMatchCount() >= 4);
+        assertTrue(alert.getMatchCount() >= 5);
+    }
+
+    @Test
+    @DisplayName("Payment fraud without remote login should not trigger alert")
+    void testPaymentFraudWithoutRemoteLogin() throws Exception {
+        RiskRule rule = RiskRule.builder().ruleId("rule-payment-002").ruleName("Payment Fraud")
+                .ruleType(RiskRule.RuleType.PAYMENT_FRAUD).targetActionType("PAYMENT_FRAUD").windowSizeMs(60_000)
+                .threshold(3).groupKeyType(RiskRule.GroupKeyType.BY_USER_ID).severityWeight(2.5).scoreThreshold(2.5)
+                .version(1).build();
+
+        long baseTime = System.currentTimeMillis();
+        List<UserBehavior> events = new ArrayList<>();
+        events.add(createPaymentEvent("user-pay-2", baseTime, 12.0));
+        events.add(createPaymentEvent("user-pay-2", baseTime + 5_000, 25.0));
+        events.add(createPaymentEvent("user-pay-2", baseTime + 8_000, 36.0));
+        events.add(createPaymentFraudEvent("user-pay-2", baseTime + 12_000, 1500.0));
+
+        DataStream<AlertEvent> alertStream = buildDetectorOnlyPipeline(env, events, rule);
+        alertStream.addSink(new CollectSink());
+
+        env.execute("Payment Fraud Without Remote Login Test");
+
+        assertTrue(CollectSink.getValues().isEmpty(), "Same-IP payments without remote login should not alert");
     }
 
     @Test
@@ -290,6 +314,10 @@ public class AbnormalBehaviorDetectionJobTest {
 
     private UserBehavior createViewEvent(String userId, String ip, long timestamp) {
         return UserBehavior.builder().userId(userId).actionType("VIEW").ip(ip).timestamp(timestamp).build();
+    }
+
+    private UserBehavior createLoginSuccessEvent(String userId, String ip, long timestamp) {
+        return UserBehavior.builder().userId(userId).actionType("LOGIN_SUCCESS").ip(ip).timestamp(timestamp).build();
     }
 
     private UserBehavior createPaymentEvent(String userId, long timestamp, double amount) {
